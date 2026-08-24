@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleExecutable</key><string>Lumos</string>
+<key>CFBundleIdentifier</key><string>com.ataberk.lumos</string>
+<key>CFBundleName</key><string>Lumos</string>
+<key>CFBundleDisplayName</key><string>Lumos</string>
+<key>CFBundleIconFile</key><string>Lumos.icns</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleShortVersionString</key><string>1.0</string>
+<key>CFBundleVersion</key><string>2</string>
+<key>LSMinimumSystemVersion</key><string>14.0</string>
+<key>LSUIElement</key><true/>
+<key>NSLocalNetworkUsageDescription</key><string>Lumos, WiZ ışıklarınızı yerel ağ üzerinden kontrol etmek için erişim kullanır.</string>
+<key>NSHighResolutionCapable</key><true/>
+</dict></plist>
