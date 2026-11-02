@@ -98,7 +98,6 @@ struct MenuBarView: View {
         .frame(width: MenuLayout.width)
         .fontDesign(.default)
         .environment(\.controlActiveState, .key)
-        .task { await store.refreshAll() }
     }
 
     private var allPowerState: MixedPowerState {
@@ -210,6 +209,7 @@ private struct MenuBarLightRow: View {
         .padding(.vertical, MenuLayout.rowVerticalInset)
         .disabled(!device.isReachable)
         .opacity(device.isReachable ? 1 : 0.48)
+        .onDisappear { brightnessPreviewTask?.cancel() }
         .onChange(of: device.brightness) { _, value in
             guard !isDraggingBrightness else { return }
             brightness = Double(value)
@@ -257,7 +257,8 @@ final class MainWindowPresenter: NSObject, NSWindowDelegate {
     private var window: NSWindow?
 
     func show(store: LightStore) {
-        NSApp.setActivationPolicy(.regular)
+        // Keep the accessory policy stable while opening and closing windows.
+        // Switching policy here needlessly rebuilds Dock and application-menu state.
         if window == nil {
             let created = NSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 820, height: 466),
@@ -291,7 +292,6 @@ final class MainWindowPresenter: NSObject, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         window = nil
-        NSApp.setActivationPolicy(.accessory)
     }
 
 }

@@ -23,8 +23,8 @@ Lumos is a modern macOS app for controlling two WiZ lights over your local netwo
 
 This version uses two fixed local IP addresses for a personal setup:
 
-- Desk Lamp: `192.168.1.197`
-- Room Lamp: `192.168.1.196`
+- Desk Lamp: `192.168.1.196`
+- Room Lamp: `192.168.1.195`
 
 To use Lumos on a different network, replace the IP addresses in `Sources/Lumos/LightStore.swift` with the reserved IP addresses of your lights.
 
@@ -43,3 +43,22 @@ On first launch, allow macOS local-network access. The downloadable GitHub build
 ## Privacy
 
 Lumos communicates only with the configured lights on your local network. It does not collect telemetry or send data to the cloud.
+
+### Automatic address recovery
+
+Lumos saves each lamp's MAC identity and last working IP. Refreshes and controls verify the identity before using an address, and recover changed addresses through local UDP discovery. For lamps that ignore broadcast queries, discovery also probes directly on active IPv4 subnets of at most 1,024 addresses. Unknown identities are never substituted for saved lamps. Discovery requires local-network access and a network that permits communication between devices.
+
+The two configured home lamps have their verified MAC identities seeded for migration from older settings. Newly added lamps learn their identity on their first successful query. Saved IP addresses now survive app restarts.
+
+Run `sh scripts/test-discovery.sh` on this home network for read-only integration checks covering stale addresses, addresses occupied by another lamp, unknown identities, and identity learning. The test does not switch lights or alter their settings.
+
+### Menu bar lifecycle
+
+Lumos keeps one fixed-width status item and presents controls in an AppKit
+popover. Display, Space, and sleep transitions close the popover without
+recreating the status item. Long device lists scroll within the popover.
+
+Run `sh scripts/test-menu-bar.sh` in a logged-in macOS GUI session for offline
+lifecycle regression checks. The test uses synthetic lights and does not send
+commands to your lamps. See [the menu bar review](docs/MENU-BAR-REVIEW.md) for
+findings and the limits of the external-display diagnosis.

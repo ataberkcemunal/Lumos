@@ -1,0 +1,177 @@
+import AppKit
+import SwiftUI
+
+/// Owns exactly one status item for the application's lifetime. Display changes
+/// dismiss its presentation, never remove/reinsert or resize the status item.
+@MainActor
+final class MenuBarPanelController: NSObject, NSPopoverDelegate {
+    private let store: LightStore
+    private(set) var statusItem: NSStatusItem?
+    let popover = NSPopover()
+    private let scrollView = NSScrollView()
+    private var hostingView: NSHostingView<AnyView>?
+    private var refreshTask: Task<Void, Never>?
+    private var isStopped = false
+    private var lastIconIsOn: Bool?
+    private static let width: CGFloat = 280
+    private static let maximumHeight: CGFloat = 640
+
+    init(store: LightStore) {
+        self.store = store
+        super.init()
+
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        statusItem = item
+        item.autosaveName = "LumosStatusItem"
+        if let button = item.button {
+            button.imagePosition = .imageOnly
+            button.toolTip = "Lumos"
+            button.setAccessibilityLabel("Lumos — ışık kontrolleri")
+            button.target = self
+            button.action = #selector(togglePopover(_:))
+        }
+
+        // Controls live in a regular window, outside NSMenu's tracking loop.
+        // AppKit owns outside-click and Escape dismissal; no global event taps.
+        popover.behavior = .transient
+        popover.animates = false
+        popover.delegate = self
+
+        NotificationCenter.default.addObserver(self, selector: #selector(displayContextChanged(_:)),
+            name: NSApplication.didChangeScreenParametersNotification, object: nil)
+        let workspace = NSWorkspace.shared.notificationCenter
+        for name in [NSWorkspace.willSleepNotification, NSWorkspace.screensDidSleepNotification,
+                     NSWorkspace.activeSpaceDidChangeNotification] {
+            workspace.addObserver(self, selector: #selector(displayContextChanged(_:)), name: name, object: nil)
+        }
+        workspace.addObserver(self, selector: #selector(didWake(_:)),
+            name: NSWorkspace.didWakeNotification, object: nil)
+        updateStatusIcon()
+        observeStore()
+        refresh()
+    }
+
+    @objc func togglePopover(_ sender: Any?) {
+        guard !isStopped else { return }
+        if popover.isShown {
+            dismiss()
+            return
+        }
+        // Use the current status button's window on every click. Cached screen
+        // coordinates are invalid after hotplug, scaling, or Space transitions.
+        guard let button = statusItem?.button, button.window?.screen != nil else { return }
+        prepareContent()
+        resizeContent()
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        button.highlight(popover.isShown)
+        popover.contentViewController?.view.window?.makeKey()
+        refresh()
+    }
+
+    func dismiss() {
+        popover.close()
+        statusItem?.button?.highlight(false)
+    }
+
+    @objc func displayContextChanged(_ notification: Notification) {
+        dismiss()
+    }
+
+    @objc func didWake(_ notification: Notification) {
+        guard !isStopped else { return }
+        dismiss()
+        refresh()
+    }
+
+    func popoverDidClose(_ notification: Notification) {
+        statusItem?.button?.highlight(false)
+        // Releasing the view resets transient UI and cancels pending slider previews.
+        scrollView.documentView = nil
+        hostingView = nil
+        popover.contentViewController = nil
+    }
+
+    private func prepareContent() {
+        guard hostingView == nil else { return }
+        let host = NSHostingView(rootView: AnyView(
+            MenuBarView(dismiss: { [weak self] in self?.dismiss() })
+                .environment(store)
+                .fixedSize(horizontal: false, vertical: true)
+        ))
+        host.frame.size.width = Self.width
+        hostingView = host
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
+        scrollView.scrollerStyle = .overlay
+        scrollView.drawsBackground = false
+        scrollView.documentView = host
+        let controller = NSViewController()
+        controller.view = scrollView
+        popover.contentViewController = controller
+    }
+
+    private func resizeContent() {
+        guard let host = hostingView else { return }
+        host.layoutSubtreeIfNeeded()
+        let height = max(120, ceil(host.fittingSize.height))
+        host.setFrameSize(NSSize(width: Self.width, height: height))
+        let available = statusItem?.button?.window?.screen?.visibleFrame.height ?? Self.maximumHeight
+        let limit = max(120, min(Self.maximumHeight, available - 24))
+        let size = NSSize(width: Self.width, height: min(height, limit))
+        scrollView.setFrameSize(size)
+        popover.contentSize = size
+    }
+
+    private func refresh() {
+        guard refreshTask == nil else { return }
+        refreshTask = Task { [weak self, store] in
+            await store.refreshAll()
+            self?.refreshTask = nil
+        }
+    }
+
+    private func updateStatusIcon() {
+        let isOn = store.devices.contains { $0.isReachable && $0.isOn }
+        guard lastIconIsOn != isOn else { return }
+        lastIconIsOn = isOn
+        let image = NSImage(systemSymbolName: isOn ? "lightbulb.fill" : "lightbulb",
+                            accessibilityDescription: "Lumos")
+        image?.isTemplate = true
+        statusItem?.button?.image = image
+    }
+
+    private func observeStore() {
+        guard !isStopped else { return }
+        withObservationTracking {
+            _ = store.devices
+            _ = store.favoriteColors
+            _ = store.favoriteTemperatures
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self, !self.isStopped else { return }
+                self.updateStatusIcon()
+                if self.popover.isShown { self.resizeContent() }
+                self.observeStore()
+            }
+        }
+    }
+
+    func stop() {
+        guard !isStopped else { return }
+        isStopped = true
+        NotificationCenter.default.removeObserver(self)
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
+        refreshTask?.cancel()
+        refreshTask = nil
+        dismiss()
+        scrollView.documentView = nil
+        hostingView = nil
+        popover.contentViewController = nil
+        popover.delegate = nil
+        if let statusItem {
+            statusItem.button?.target = nil
+            NSStatusBar.system.removeStatusItem(statusItem)
+        }
+        statusItem = nil
+    }
+}

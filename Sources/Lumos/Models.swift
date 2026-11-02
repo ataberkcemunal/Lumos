@@ -53,6 +53,7 @@ struct LightDevice: Identifiable, Codable, Hashable {
     var name: String
     var ip: String
     var room: String
+    var mac: String? = nil
     var isOn = false
     var brightness = 100
     var temperature = 3000

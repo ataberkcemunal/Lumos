@@ -754,6 +754,7 @@ private struct ValidatedTextField: NSViewRepresentable {
         var parent: ValidatedTextField
         weak var field: NSTextField?
         private var outsideClickMonitor: Any?
+        private var hasUserEdits = false
 
         init(_ parent: ValidatedTextField) { self.parent = parent }
 
@@ -761,10 +762,19 @@ private struct ValidatedTextField: NSViewRepresentable {
             guard let field = notification.object as? NSTextField else { return }
             let accepted = parent.filter(parent.text, field.stringValue)
             if field.stringValue != accepted { field.stringValue = accepted }
+            if accepted != parent.text { hasUserEdits = true }
             parent.text = accepted
         }
 
         func controlTextDidEndEditing(_ notification: Notification) {
+            commitUserEdits()
+        }
+
+        // Focus changes (including initial window activation) are not edits.
+        // Clear the flag before committing so duplicate end-editing events cannot resend.
+        private func commitUserEdits() {
+            guard hasUserEdits else { return }
+            hasUserEdits = false
             syncFieldValue()
             parent.onCommit()
         }
@@ -799,8 +809,7 @@ private struct ValidatedTextField: NSViewRepresentable {
                         return
                     }
                     if !fieldRectOnScreen.contains(NSEvent.mouseLocation) {
-                        self.syncFieldValue()
-                        self.parent.onCommit()
+                        self.commitUserEdits()
                         field.abortEditing()
                         field.window?.makeFirstResponder(nil)
                     }

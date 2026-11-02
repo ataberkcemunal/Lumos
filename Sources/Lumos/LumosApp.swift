@@ -5,24 +5,15 @@ import SwiftUI
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let store = LightStore()
     private var menuController: MenuBarPanelController?
-    private var wakeObserver: NSObjectProtocol?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         installMainMenu()
         menuController = MenuBarPanelController(store: store)
-        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.didWakeNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in await self?.store.refreshAll() }
-        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        if let wakeObserver {
-            NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
-        }
+        menuController?.stop()
+        menuController = nil
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
@@ -71,78 +62,4 @@ enum LumosApplication {
         application.run()
         _ = delegate
     }
-}
-
-@MainActor
-private final class MenuBarPanelController: NSObject, NSMenuDelegate {
-    private let store: LightStore
-    private let statusItem: NSStatusItem
-    private let menu: NSMenu
-    private let contentItem: NSMenuItem
-    private let hostingView: NSHostingView<AnyView>
-
-    init(store: LightStore) {
-        self.store = store
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        menu = NSMenu()
-        contentItem = NSMenuItem()
-        hostingView = NSHostingView(rootView: AnyView(
-            MenuBarView(dismiss: { [weak menu] in menu?.cancelTracking() })
-                .environment(store)
-        ))
-        super.init()
-
-        if let button = statusItem.button {
-            button.imagePosition = .imageOnly
-            button.toolTip = "Lumos"
-        }
-
-        menu.autoenablesItems = false
-        menu.delegate = self
-        contentItem.target = self
-        contentItem.action = #selector(keepMenuContentEnabled(_:))
-        contentItem.view = hostingView
-        contentItem.isEnabled = true
-        menu.addItem(contentItem)
-        statusItem.menu = menu
-
-        updateStatusIcon()
-        resizeMenuContent()
-        observeStore()
-    }
-
-    @objc private func keepMenuContentEnabled(_ sender: Any?) {
-        // The custom view handles its own controls. A valid target/action keeps
-        // AppKit from treating the containing menu item as disabled.
-    }
-
-    func menuWillOpen(_ menu: NSMenu) {
-        resizeMenuContent()
-        Task { await store.refreshAll() }
-    }
-
-    private func resizeMenuContent() {
-        hostingView.layoutSubtreeIfNeeded()
-        let fitting = hostingView.fittingSize
-        hostingView.frame = NSRect(x: 0, y: 0, width: 280, height: max(120, min(fitting.height, 720)))
-    }
-
-    private func updateStatusIcon() {
-        let symbol = store.devices.contains { $0.isReachable && $0.isOn } ? "lightbulb.fill" : "lightbulb"
-        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Lumos")
-        image?.isTemplate = true
-        statusItem.button?.image = image
-    }
-
-    private func observeStore() {
-        withObservationTracking {
-            _ = store.devices.map { ($0.isReachable, $0.isOn) }
-        } onChange: { [weak self] in
-            Task { @MainActor in
-                self?.updateStatusIcon()
-                self?.observeStore()
-            }
-        }
-    }
-
 }

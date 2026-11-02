@@ -9,12 +9,14 @@ struct ConnectionFeedback: Equatable {
 private struct RefreshTarget: Sendable {
     let id: UUID
     let ip: String
+    let mac: String?
     let wasReachable: Bool
 }
 
 private struct RefreshResult: Sendable {
     let target: RefreshTarget
     let state: PilotState?
+    let resolvedIP: String?
 }
 
 @MainActor @Observable
@@ -39,14 +41,16 @@ final class LightStore {
         let room = saved.first { $0.name == "Oda Lambası" }
         devices = [
             LightDevice(
-                id: desk?.id ?? UUID(), name: "Çalışma Masası Lambası", ip: "192.168.1.197", room: "",
+                id: desk?.id ?? UUID(), name: "Çalışma Masası Lambası", ip: desk?.ip ?? "192.168.1.196", room: "",
+                mac: desk?.mac ?? "9877d5c890f8",
                 isOn: desk?.isOn ?? false, brightness: desk?.brightness ?? 100,
                 temperature: desk?.temperature ?? 3000, red: desk?.red ?? 255,
                 green: desk?.green ?? 187, blue: desk?.blue ?? 110,
                 sceneID: nil, speed: 100, isReachable: desk?.isReachable ?? true
             ),
             LightDevice(
-                id: room?.id ?? UUID(), name: "Oda Lambası", ip: "192.168.1.196", room: "",
+                id: room?.id ?? UUID(), name: "Oda Lambası", ip: room?.ip ?? "192.168.1.195", room: "",
+                mac: room?.mac ?? "d8a011732cf0",
                 isOn: room?.isOn ?? false, brightness: room?.brightness ?? 100,
                 temperature: room?.temperature ?? 3000, red: room?.red ?? 255,
                 green: room?.green ?? 187, blue: room?.blue ?? 110,
@@ -97,6 +101,9 @@ final class LightStore {
 
     func setPower(_ on: Bool, ids: [UUID]? = nil) async {
         let targets = ids ?? devices.map(\.id)
+        let previousStates = Dictionary(uniqueKeysWithValues: devices
+            .filter { targets.contains($0.id) }
+            .map { ($0.id, $0) })
         // Publish the requested power state once so the aggregate toggle never
         // walks through an intermediate mixed state while commands are sent.
         for index in devices.indices where targets.contains(devices[index].id) {
@@ -109,13 +116,24 @@ final class LightStore {
             }
         }
         persist()
+        var successfulTargets: [UUID] = []
         for id in targets {
             let params: [String: JSONValue] = on
                 ? ["state": .bool(true), "dimming": .int(100), "temp": .int(3000)]
                 : ["state": .bool(false)]
-            await send(id: id, params: params)
+            if await send(id: id, params: params, waitForAcknowledgement: true) {
+                successfulTargets.append(id)
+            } else if let previous = previousStates[id] {
+                update(id) {
+                    $0.isOn = previous.isOn
+                    $0.brightness = previous.brightness
+                    $0.temperature = previous.temperature
+                    $0.isColorMode = previous.isColorMode
+                    $0.sceneID = previous.sceneID
+                }
+            }
         }
-        playPowerSound(isOn: on)
+        if !successfulTargets.isEmpty { playPowerSound(isOn: on) }
         persist()
     }
 
@@ -197,17 +215,12 @@ final class LightStore {
         guard !isRefreshing else { return }
         isRefreshing = true
         defer { isRefreshing = false; persist() }
-        let targets = devices.map { RefreshTarget(id: $0.id, ip: $0.ip, wasReachable: $0.isReachable) }
+        let targets = devices.map { RefreshTarget(id: $0.id, ip: $0.ip, mac: $0.mac, wasReachable: $0.isReachable) }
         let results = await withTaskGroup(of: RefreshResult.self, returning: [RefreshResult].self) { group in
             for target in targets {
                 group.addTask {
-                    var state: PilotState?
-                    for attempt in 0..<2 {
-                        state = try? await WizClient.shared.command(ip: target.ip, method: "getPilot", expectsReply: true)
-                        if state != nil { break }
-                        if attempt == 0 { try? await Task.sleep(for: .milliseconds(120)) }
-                    }
-                    return RefreshResult(target: target, state: state)
+                    let located = await WizClient.shared.resolve(ip: target.ip, mac: target.mac)
+                    return RefreshResult(target: target, state: located?.state, resolvedIP: located?.ip)
                 }
             }
             var collected: [RefreshResult] = []
@@ -222,6 +235,8 @@ final class LightStore {
         for response in results {
             guard let index = refreshedDevices.firstIndex(where: { $0.id == response.target.id }) else { continue }
             if let result = response.state {
+                if let ip = response.resolvedIP { refreshedDevices[index].ip = ip }
+                refreshedDevices[index].mac = normalizedMAC(result.mac)
                 consecutiveRefreshFailures[response.target.id] = 0
                 refreshedDevices[index].isReachable = true
                 refreshedDevices[index].isOn = result.state ?? refreshedDevices[index].isOn
@@ -252,24 +267,51 @@ final class LightStore {
         }
     }
 
-    private func send(id: UUID, params: [String: JSONValue]) async {
-        guard let device = devices.first(where: { $0.id == id }) else { return }
-        do {
-            let wasReachable = device.isReachable
-            _ = try await WizClient.shared.command(
-                ip: device.ip,
-                method: "setPilot",
-                params: params
-            )
-            update(id) { $0.isReachable = true }
-            if !wasReachable || connectionFeedback[id]?.isError == true {
-                showFeedback(id: id, message: "Yeniden bağlandı", isError: false, autoHide: true)
-            }
-        } catch {
+    @discardableResult
+    private func send(
+        id: UUID,
+        params: [String: JSONValue],
+        waitForAcknowledgement: Bool = false
+    ) async -> Bool {
+        guard var device = devices.first(where: { $0.id == id }) else { return false }
+        // Verify identity before any write: DHCP can assign the old IP to another lamp.
+        guard let located = await WizClient.shared.resolve(ip: device.ip, mac: device.mac) else {
             update(id) { $0.isReachable = false }
-            showFeedback(id: id, message: "Komut gönderilemedi", isError: true)
-            toast = "\(device.name) erişilemiyor"
+            showFeedback(id: id, message: "Bağlantı yok", isError: true, autoHide: false)
+            return false
         }
+        device.ip = located.ip
+        update(id) { $0.ip = located.ip; $0.mac = normalizedMAC(located.state.mac) }
+        persist()
+        let attemptCount = waitForAcknowledgement ? 2 : 1
+
+        for attempt in 0..<attemptCount {
+            do {
+                let wasReachable = device.isReachable
+                _ = try await WizClient.shared.command(
+                    ip: device.ip,
+                    method: "setPilot",
+                    params: params,
+                    expectsReply: waitForAcknowledgement
+                )
+                update(id) { $0.isReachable = true }
+                if !wasReachable || connectionFeedback[id]?.isError == true {
+                    showFeedback(id: id, message: "Yeniden bağlandı", isError: false, autoHide: true)
+                }
+                return true
+            } catch {
+                if attempt + 1 < attemptCount {
+                    try? await Task.sleep(for: .milliseconds(100))
+                    continue
+                }
+            }
+        }
+
+        // A single missed UDP acknowledgement should not label an otherwise
+        // healthy lamp offline. Periodic getPilot refreshes own reachability.
+        showFeedback(id: id, message: "Komut gönderilemedi", isError: true)
+        toast = "\(device.name) komuta yanıt vermedi"
+        return false
     }
 
     private func update(_ id: UUID, _ body: (inout LightDevice) -> Void) {
