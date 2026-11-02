@@ -1,6 +1,14 @@
 import Foundation
 import Network
 import Darwin
+import os
+
+/// Network and storage failures go to the unified log (Console, subsystem
+/// com.ataberk.lumos) instead of disappearing behind `try?`.
+enum LumosLog {
+    static let network = Logger(subsystem: "com.ataberk.lumos", category: "network")
+    static let storage = Logger(subsystem: "com.ataberk.lumos", category: "storage")
+}
 
 actor WizClient {
     static let shared = WizClient()
@@ -25,8 +33,12 @@ actor WizClient {
     /// scans the subnet, so it is opt-in, shared by concurrent callers, and
     /// backs off per lamp while that lamp stays missing.
     func resolve(ip: String, mac: String?, allowDiscovery: Bool = true, ignoreBackoff: Bool = false) async -> LocatedLight? {
-        if let state = try? await command(ip: ip, method: "getPilot", expectsReply: true),
-           state.state != nil, let identity = normalizedMAC(state.mac),
+        let state: PilotState?
+        do { state = try await command(ip: ip, method: "getPilot", expectsReply: true) } catch {
+            LumosLog.network.info("getPilot at \(ip, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+            state = nil
+        }
+        if let state, state.state != nil, let identity = normalizedMAC(state.mac),
            mac == nil || normalizedMAC(mac) == identity {
             discoveryBackoff[identity] = nil
             return LocatedLight(ip: ip, state: state)
@@ -88,10 +100,11 @@ actor WizClient {
             connection.receiveMessage { data, _, _, error in
                 gate.run {
                     if let error { continuation.resume(throwing: error); return }
-                    guard let data, let reply = try? JSONDecoder().decode(WizReply.self, from: data) else {
-                        continuation.resume(returning: nil); return
+                    guard let data else { continuation.resume(returning: nil); return }
+                    do { continuation.resume(returning: try JSONDecoder().decode(WizReply.self, from: data).result) } catch {
+                        LumosLog.network.error("Unreadable reply from \(ip, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                        continuation.resume(returning: nil)
                     }
-                    continuation.resume(returning: reply.result)
                 }
             }
             DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 1.2) {

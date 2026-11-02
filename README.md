@@ -22,12 +22,9 @@ Lumos is a modern macOS app for controlling two WiZ lights over your local netwo
 
 ## Device configuration
 
-This version uses two fixed local IP addresses for a personal setup:
+Lumos is set up for two named WiZ lamps, "Çalışma Masası Lambası" and "Oda Lambası", seeded in `Sources/Lumos/LightStore.swift` with their MAC addresses. IP addresses do not need to be configured: Lumos finds each lamp by its MAC and remembers its last address, so DHCP changes are handled automatically (see [Automatic address recovery](#automatic-address-recovery)).
 
-- Desk Lamp: `192.168.1.196`
-- Room Lamp: `192.168.1.195`
-
-To use Lumos on a different network, replace the IP addresses in `Sources/Lumos/LightStore.swift` with the reserved IP addresses of your lights.
+To use Lumos with other lamps, replace the names and MAC addresses in `LightStore.swift`.
 
 ## Build and install
 
@@ -46,6 +43,12 @@ On first launch, allow macOS local-network access. The downloadable GitHub build
 ## Privacy
 
 Lumos communicates only with the configured lights on your local network. It does not collect telemetry or send data to the cloud.
+
+Connection and storage failures are written to the macOS unified log. To follow them, filter Console for the subsystem `com.ataberk.lumos`, or run:
+
+```sh
+/usr/bin/log stream --predicate 'subsystem == "com.ataberk.lumos"' --level info
+```
 
 ### Automatic address recovery
 

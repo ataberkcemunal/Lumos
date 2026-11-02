@@ -23,7 +23,7 @@ private struct RefreshResult: Sendable {
 final class LightStore {
     var devices: [LightDevice]
     var isRefreshing = false
-    var toast: String?
+    var toast: ToastMessage?
     var favoriteColors: [String] = []
     var favoriteTemperatures: [Int] = []
     var connectionFeedback: [UUID: ConnectionFeedback] = [:]
@@ -48,7 +48,12 @@ final class LightStore {
     init(client: WizClient = .shared) {
         self.client = client
         let saved = UserDefaults.standard.data(forKey: "lumos.devices")
-            .flatMap { try? JSONDecoder().decode([LightDevice].self, from: $0) } ?? []
+            .flatMap { data -> [LightDevice]? in
+                do { return try JSONDecoder().decode([LightDevice].self, from: data) } catch {
+                    LumosLog.storage.error("Saved lamps could not be read: \(error.localizedDescription, privacy: .public)")
+                    return nil
+                }
+            } ?? []
         let desk = saved.first { $0.name == "Çalışma Masası Lambası" }
         let room = saved.first { $0.name == "Oda Lambası" }
         devices = [
@@ -81,7 +86,11 @@ final class LightStore {
         return device.isReachable ? nil : ConnectionFeedback(message: "Bağlantı yok", isError: true)
     }
 
-    func persist() { if let data = try? JSONEncoder().encode(devices) { UserDefaults.standard.set(data, forKey: "lumos.devices") } }
+    func persist() {
+        do { UserDefaults.standard.set(try JSONEncoder().encode(devices), forKey: "lumos.devices") } catch {
+            LumosLog.storage.error("Lamps could not be saved: \(error.localizedDescription, privacy: .public)")
+        }
+    }
 
     /// The menu bar row fits eight swatches in total; a card row fits five of
     /// one kind beside its input field. A full list never drops a favorite.
@@ -190,10 +199,7 @@ final class LightStore {
     }
 
     func setColor(_ color: Color, id: UUID) async {
-        guard let srgb = NSColor(color).usingColorSpace(.sRGB) else { return }
-        let r = Int((srgb.redComponent * 255).rounded())
-        let g = Int((srgb.greenComponent * 255).rounded())
-        let b = Int((srgb.blueComponent * 255).rounded())
+        guard case let (r, g, b)? = color.rgb255 else { return }
         let wasOff = devices.first(where: { $0.id == id })?.isOn == false
         update(id) { $0.isOn = true; $0.red = r; $0.green = g; $0.blue = b; $0.sceneID = nil; $0.isColorMode = true }
         if wasOff { powerOnSoundPending.insert(id) }
@@ -201,10 +207,7 @@ final class LightStore {
     }
 
     func stageColorPreview(_ color: Color, id: UUID) {
-        guard let srgb = NSColor(color).usingColorSpace(.sRGB) else { return }
-        let r = Int((srgb.redComponent * 255).rounded())
-        let g = Int((srgb.greenComponent * 255).rounded())
-        let b = Int((srgb.blueComponent * 255).rounded())
+        guard case let (r, g, b)? = color.rgb255 else { return }
         let wasOff = devices.first(where: { $0.id == id })?.isOn == false
         update(id) { $0.isOn = true; $0.red = r; $0.green = g; $0.blue = b; $0.sceneID = nil; $0.isColorMode = true }
         if wasOff { powerOnSoundPending.insert(id) }
@@ -212,8 +215,7 @@ final class LightStore {
 
     func previewColor(_ color: Color, id: UUID) async {
         guard shouldPreview(id: id, timestamps: &lastColorPreview),
-              let srgb = NSColor(color).usingColorSpace(.sRGB) else { return }
-        let r = Int((srgb.redComponent * 255).rounded()), g = Int((srgb.greenComponent * 255).rounded()), b = Int((srgb.blueComponent * 255).rounded())
+              case let (r, g, b)? = color.rgb255 else { return }
         let wasOff = devices.first(where: { $0.id == id })?.isOn == false
         update(id) { $0.isOn = true; $0.red = r; $0.green = g; $0.blue = b; $0.sceneID = nil; $0.isColorMode = true }
         if wasOff { powerOnSoundPending.insert(id) }
@@ -325,6 +327,7 @@ final class LightStore {
         let lastVerified = verifiedAt[id] ?? -.infinity
         if ProcessInfo.processInfo.systemUptime - lastVerified > Self.identityLifetime {
             guard let located = await client.resolve(ip: device.ip, mac: device.mac, allowDiscovery: !isPreview) else {
+                LumosLog.network.notice("\(device.name, privacy: .public) not found at \(device.ip, privacy: .public)\(isPreview ? " (preview, no scan)" : "", privacy: .public)")
                 if !isPreview {
                     update(id) { $0.isReachable = false }
                     showFeedback(id: id, message: "Bağlantı yok", isError: true, autoHide: false)
@@ -354,6 +357,7 @@ final class LightStore {
                 if powerOnSoundPending.remove(id) != nil { playPowerSound(isOn: true) }
                 return true
             } catch {
+                LumosLog.network.error("setPilot to \(device.name, privacy: .public) at \(device.ip, privacy: .public) failed (attempt \(attempt + 1)): \(error.localizedDescription, privacy: .public)")
                 if attempt + 1 < attemptCount {
                     try? await Task.sleep(for: .milliseconds(100))
                     continue
@@ -366,7 +370,7 @@ final class LightStore {
         // the next write re-verifies identity in case the address moved.
         verifiedAt[id] = nil
         showFeedback(id: id, message: "Komut gönderilemedi", isError: true)
-        toast = "\(device.name) komuta yanıt vermedi"
+        toast = ToastMessage(text: "\(device.name) komuta yanıt vermedi")
         return false
     }
 

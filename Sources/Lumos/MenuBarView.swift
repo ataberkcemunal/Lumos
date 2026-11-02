@@ -33,7 +33,7 @@ struct MenuBarView: View {
             HStack {
                 HStack(spacing: 3) {
                     ForEach(store.devices) { device in
-                        Image(systemName: headerSymbol(for: device))
+                        Image(systemName: device.symbolName)
                             .symbolRenderingMode(.monochrome)
                             .foregroundStyle(Color.secondary)
                             .frame(height: 18)
@@ -125,10 +125,6 @@ struct MenuBarView: View {
         return interfaceAccentColor(color, for: colorScheme)
     }
 
-    private func headerSymbol(for device: LightDevice) -> String {
-        let base = device.name == "Çalışma Masası Lambası" ? "lamp.desk" : "lightbulb.led"
-        return device.isReachable && device.isOn ? "\(base).fill" : base
-    }
 }
 
 private struct MenuBarLightRow: View {
@@ -147,7 +143,7 @@ private struct MenuBarLightRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: MenuLayout.rowSpacing) {
             HStack(spacing: MenuLayout.columnSpacing) {
-                Image(systemName: symbol).frame(width: MenuLayout.iconColumnWidth, height: 18)
+                Image(systemName: device.symbolName).frame(width: MenuLayout.iconColumnWidth, height: 18)
                     .symbolRenderingMode(.monochrome)
                     .foregroundStyle(Color.secondary)
                 VStack(alignment: .leading, spacing: 1) {
@@ -214,7 +210,7 @@ private struct MenuBarLightRow: View {
                         }
                         ForEach(store.favoriteColors.prefix(LightStore.maximumFavoritesPerKind), id: \.self) { hex in
                             Button { applyColor(hex) } label: {
-                                Circle().fill(color(from: hex) ?? .white).frame(width: 16, height: 16)
+                                Circle().fill(Color(hex: hex) ?? .white).frame(width: 16, height: 16)
                                     .overlay(
                                         Circle()
                                             .stroke(isSelected(hex: hex) ? Color.primary : .primary.opacity(0.15), lineWidth: isSelected(hex: hex) ? 1.5 : 1)
@@ -242,11 +238,6 @@ private struct MenuBarLightRow: View {
         }
     }
 
-    private var symbol: String {
-        let base = device.name == "Çalışma Masası Lambası" ? "lamp.desk" : "lightbulb.led"
-        return device.isReachable && device.isOn ? "\(base).fill" : base
-    }
-
     private var activeColor: Color {
         interfaceAccentColor(
             device.isColorMode == true ? device.color : whiteColor(for: device.temperature),
@@ -263,16 +254,8 @@ private struct MenuBarLightRow: View {
     }
 
     private func applyColor(_ hex: String) {
-        guard let value = color(from: hex) else { return }
+        guard let value = Color(hex: hex) else { return }
         Task { await store.setColor(value, id: device.id) }
-    }
-
-    private func color(from hex: String) -> Color? {
-        let clean = hex.trimmingCharacters(in: CharacterSet(charactersIn: "# "))
-        guard clean.count == 6, let value = Int(clean, radix: 16) else { return nil }
-        return Color(red: Double((value >> 16) & 255) / 255,
-                     green: Double((value >> 8) & 255) / 255,
-                     blue: Double(value & 255) / 255)
     }
 
     private func isSelected(kelvin: Int) -> Bool {
@@ -281,8 +264,7 @@ private struct MenuBarLightRow: View {
 
     private func isSelected(hex: String) -> Bool {
         guard device.isColorMode == true else { return false }
-        let current = String(format: "%02X%02X%02X", device.red, device.green, device.blue)
-        return current.caseInsensitiveCompare(hex.trimmingCharacters(in: CharacterSet(charactersIn: "# "))) == .orderedSame
+        return device.hex.caseInsensitiveCompare(hex.trimmingCharacters(in: CharacterSet(charactersIn: "# "))) == .orderedSame
     }
 }
 

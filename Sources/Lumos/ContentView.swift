@@ -52,7 +52,7 @@ struct ContentView: View {
             .frame(height: 28)
             .ignoresSafeArea(edges: .top)
         }
-        .overlay(alignment: .bottom) { if let toast = store.toast { ToastView(text: toast).padding(.bottom, 22) } }
+        .overlay(alignment: .bottom) { if let toast = store.toast { ToastView(message: toast).padding(.bottom, 22) } }
         .fontDesign(.default)
         .environment(\.controlActiveState, isWindowFocused ? .key : .inactive)
         .onAppear {
@@ -89,7 +89,7 @@ struct ContentView: View {
         HStack(spacing: 10) {
             HStack(spacing: 3) {
                 ForEach(store.devices) { device in
-                    Image(systemName: topSymbol(for: device))
+                    Image(systemName: device.symbolName)
                         .symbolRenderingMode(.monochrome)
                         .foregroundStyle(Color.secondary)
                 }
@@ -134,11 +134,6 @@ struct ContentView: View {
         else { power = "\(visibleDevices.first(where: \.isOn)?.name ?? "Bir lamba") açık" }
         let missing = store.devices.count - visibleDevices.count
         return missing > 0 ? "\(power) · \(missing) lamba yanıt vermiyor" : power
-    }
-
-    private func topSymbol(for device: LightDevice) -> String {
-        let base = device.name == "Çalışma Masası Lambası" ? "lamp.desk" : "lightbulb.led"
-        return device.isReachable && device.isOn ? "\(base).fill" : base
     }
 
     private func topIndicatorColor(for device: LightDevice) -> Color {
@@ -289,7 +284,7 @@ private struct MinimalLightCard: View {
             HStack(spacing: 13) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 14).fill(device.isReachable && device.isOn ? indicatorColor.opacity(0.20) : Color.secondary.opacity(0.08))
-                    Image(systemName: cardSymbol)
+                    Image(systemName: device.symbolName)
                         .symbolRenderingMode(.monochrome)
                         .font(.title2)
                         .foregroundStyle(Color.secondary)
@@ -450,11 +445,6 @@ private struct MinimalLightCard: View {
     private func controlTitle(_ title: String, value: String) -> some View {
         HStack { Text(title).font(.subheadline.weight(.medium)); Spacer(); Text(value).font(.caption.monospacedDigit()).foregroundStyle(.secondary) }
             .frame(height: MainLayout.controlTitleHeight)
-    }
-
-    private var cardSymbol: String {
-        let base = device.name == "Çalışma Masası Lambası" ? "lamp.desk" : "lightbulb.led"
-        return device.isReachable && device.isOn ? "\(base).fill" : base
     }
 
     private func whiteColor(for kelvin: Int) -> Color {
@@ -809,7 +799,7 @@ private struct InlineColorControl: View {
         source.getHue(&h, saturation: &s, brightness: &b, alpha: &a)
         _hue = State(initialValue: Double(h))
         _saturation = State(initialValue: Double(s))
-        _hex = State(initialValue: Self.hexString(color.wrappedValue))
+        _hex = State(initialValue: color.wrappedValue.hexString)
     }
 
     var body: some View {
@@ -836,15 +826,15 @@ private struct InlineColorControl: View {
                 .disabled(!isFavoriteColor && !store.canAddFavoriteColor)
                 .help(isFavoriteColor || store.canAddFavoriteColor ? "Favoriye ekle veya çıkar" : LightStore.fullFavoritesHelp)
                 ForEach(store.favoriteColors.prefix(LightStore.maximumFavoritesPerKind), id: \.self) { value in
-                    Circle().fill(Self.color(from: value) ?? .white).frame(width: 25, height: 25)
+                    Circle().fill(Color(hex: value) ?? .white).frame(width: 25, height: 25)
                         .overlay(
                             Circle().stroke(
-                                Self.hexString(color).caseInsensitiveCompare(value) == .orderedSame ? Color.primary : .primary.opacity(0.15),
-                                lineWidth: Self.hexString(color).caseInsensitiveCompare(value) == .orderedSame ? 1.5 : 1
+                                color.hexString.caseInsensitiveCompare(value) == .orderedSame ? Color.primary : .primary.opacity(0.15),
+                                lineWidth: color.hexString.caseInsensitiveCompare(value) == .orderedSame ? 1.5 : 1
                             )
                             .frame(
-                                width: Self.hexString(color).caseInsensitiveCompare(value) == .orderedSame ? 28 : 25,
-                                height: Self.hexString(color).caseInsensitiveCompare(value) == .orderedSame ? 28 : 25
+                                width: color.hexString.caseInsensitiveCompare(value) == .orderedSame ? 28 : 25,
+                                height: color.hexString.caseInsensitiveCompare(value) == .orderedSame ? 28 : 25
                             )
                         )
                         .contentShape(Circle())
@@ -868,11 +858,11 @@ private struct InlineColorControl: View {
         // A color applied elsewhere (menu bar, refresh) moves the slider and HEX
         // field without echoing a command back to the lamp.
         .onChange(of: color) { _, value in
-            guard Self.hexString(value) != hex else { return }
+            guard value.hexString != hex else { return }
             let source = NSColor(value).usingColorSpace(.deviceRGB) ?? .white
             var h: CGFloat = 0, s: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
             source.getHue(&h, saturation: &s, brightness: &b, alpha: &a)
-            hex = Self.hexString(value)
+            hex = value.hexString
             saturation = Double(s)
             if hue != Double(h) {
                 externallySetHue = Double(h)
@@ -897,7 +887,7 @@ private struct InlineColorControl: View {
 
     private var favoriteComponents: [(hue: Double, saturation: Double)] {
         store.favoriteColors.compactMap { value in
-            guard let favorite = Self.color(from: value) else { return nil }
+            guard let favorite = Color(hex: value) else { return nil }
             let source = NSColor(favorite).usingColorSpace(.deviceRGB) ?? .white
             var h: CGFloat = 0, s: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
             source.getHue(&h, saturation: &s, brightness: &b, alpha: &a)
@@ -929,7 +919,7 @@ private struct InlineColorControl: View {
     private func updateColor(commitChange: Bool, liveChange: Bool = false) {
         let value = spectrumColor(hue: hue, saturation: saturation)
         color = value
-        hex = Self.hexString(value)
+        hex = value.hexString
         if liveChange { live(value) }
         if commitChange { commit(value) }
     }
@@ -937,33 +927,22 @@ private struct InlineColorControl: View {
     private func apply(hex value: String, shouldCommit: Bool) {
         let clean = value.trimmingCharacters(in: CharacterSet(charactersIn: "# ")).uppercased()
         guard clean.count == 6 else {
-            hex = Self.hexString(color)
+            hex = color.hexString
             return
         }
-        guard let adjusted = Self.fullIntensityHex(clean), let selected = Self.color(from: adjusted) else {
-            hex = Self.hexString(color)
-            store.toast = "#\(clean) uygulanamadı: siyah bir renk değil, kapalı ışıktır"
+        guard let adjusted = Self.fullIntensityHex(clean), let selected = Color(hex: adjusted) else {
+            hex = color.hexString
+            store.toast = ToastMessage(text: "#\(clean) uygulanamadı: siyah bir renk değil, kapalı ışıktır")
             return
         }
         if adjusted != clean {
-            store.toast = "#\(clean) → #\(adjusted) olarak uygulandı; koyuluğu parlaklıkla ayarlayın"
+            store.toast = ToastMessage(text: "#\(clean) → #\(adjusted) olarak uygulandı; koyuluğu parlaklıkla ayarlayın", isError: false)
         }
         let source = NSColor(selected).usingColorSpace(.deviceRGB) ?? .white
         var h: CGFloat = 0, s: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
         source.getHue(&h, saturation: &s, brightness: &b, alpha: &a)
-        hue = Double(h); saturation = Double(s); color = selected; hex = Self.hexString(selected)
+        hue = Double(h); saturation = Double(s); color = selected; hex = selected.hexString
         if shouldCommit { commit(selected) }
-    }
-
-    private static func hexString(_ color: Color) -> String {
-        guard let value = NSColor(color).usingColorSpace(.sRGB) else { return "FFFFFF" }
-        return String(format: "%02X%02X%02X", Int((value.redComponent * 255).rounded()), Int((value.greenComponent * 255).rounded()), Int((value.blueComponent * 255).rounded()))
-    }
-
-    private static func color(from hex: String) -> Color? {
-        let clean = hex.trimmingCharacters(in: CharacterSet(charactersIn: "# "))
-        guard clean.count == 6, let value = Int(clean, radix: 16) else { return nil }
-        return Color(red: Double((value >> 16) & 255) / 255, green: Double((value >> 8) & 255) / 255, blue: Double(value & 255) / 255)
     }
 
     /// Brightness has its own slider, so a color always runs at full intensity:
@@ -1143,8 +1122,8 @@ private func hsvRGB(hue: Double, saturation: Double) -> (r: Double, g: Double, b
 }
 
 struct ToastView: View {
-    let text: String
+    let message: ToastMessage
     var body: some View {
-        Label(text, systemImage: "exclamationmark.circle.fill").font(.callout.weight(.medium)).padding(.horizontal, 16).padding(.vertical, 10).background(.regularMaterial, in: Capsule()).shadow(radius: 10)
+        Label(message.text, systemImage: message.isError ? "exclamationmark.circle.fill" : "info.circle.fill").font(.callout.weight(.medium)).padding(.horizontal, 16).padding(.vertical, 10).background(.regularMaterial, in: Capsule()).shadow(radius: 10)
     }
 }

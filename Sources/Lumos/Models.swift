@@ -1,6 +1,33 @@
 import AppKit
 import SwiftUI
 
+/// A message shown at the bottom of the main window. Errors and information
+/// use different icons so a successful adjustment does not look like a failure.
+struct ToastMessage: Equatable {
+    let text: String
+    var isError = true
+}
+
+extension Color {
+    /// Parses six-digit HEX, with or without a leading `#`.
+    init?(hex: String) {
+        let clean = hex.trimmingCharacters(in: CharacterSet(charactersIn: "# "))
+        guard clean.count == 6, let value = Int(clean, radix: 16) else { return nil }
+        self.init(red: Double((value >> 16) & 255) / 255, green: Double((value >> 8) & 255) / 255, blue: Double(value & 255) / 255)
+    }
+
+    /// 0–255 sRGB channels, as WiZ expects them.
+    var rgb255: (red: Int, green: Int, blue: Int)? {
+        guard let srgb = NSColor(self).usingColorSpace(.sRGB) else { return nil }
+        return (Int((srgb.redComponent * 255).rounded()), Int((srgb.greenComponent * 255).rounded()), Int((srgb.blueComponent * 255).rounded()))
+    }
+
+    var hexString: String {
+        guard let rgb = rgb255 else { return "FFFFFF" }
+        return String(format: "%02X%02X%02X", rgb.red, rgb.green, rgb.blue)
+    }
+}
+
 /// A perceptual UI palette for tunable-white lamps. The anchors deliberately
 /// keep 3000 K creamy yellow instead of the brownish orange produced by a
 /// single linear interpolation across the full CCT range.
@@ -66,4 +93,11 @@ struct LightDevice: Identifiable, Codable, Hashable {
     var isColorMode: Bool? = false
 
     var color: Color { Color(red: Double(red)/255, green: Double(green)/255, blue: Double(blue)/255) }
+    var hex: String { String(format: "%02X%02X%02X", red, green, blue) }
+
+    /// The desk lamp gets its own symbol; the room lamp is a bulb.
+    var symbolName: String {
+        let base = name == "Çalışma Masası Lambası" ? "lamp.desk" : "lightbulb.led"
+        return isReachable && isOn ? "\(base).fill" : base
+    }
 }
