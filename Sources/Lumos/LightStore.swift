@@ -72,6 +72,12 @@ final class LightStore {
     var allOn: Bool { !devices.isEmpty && devices.allSatisfy(\.isOn) }
     var onlineCount: Int { devices.filter(\.isReachable).count }
 
+    /// The connection message to show under a lamp's name, if any.
+    func status(for device: LightDevice) -> ConnectionFeedback? {
+        if let feedback = connectionFeedback[device.id] { return feedback }
+        return device.isReachable ? nil : ConnectionFeedback(message: "Bağlantı yok", isError: true)
+    }
+
     func persist() { if let data = try? JSONEncoder().encode(devices) { UserDefaults.standard.set(data, forKey: "lumos.devices") } }
 
     func add(name: String, ip: String, room: String) {
@@ -218,7 +224,9 @@ final class LightStore {
         await send(id: id, params: ["speed": .int(value)]); persist()
     }
 
-    func refreshAll() async {
+    /// A user-requested refresh (`retry`) rescans for missing lamps immediately
+    /// instead of waiting out the discovery backoff.
+    func refreshAll(retry: Bool = false) async {
         guard !isRefreshing else { return }
         isRefreshing = true
         defer { isRefreshing = false; persist() }
@@ -227,7 +235,7 @@ final class LightStore {
         let results = await withTaskGroup(of: RefreshResult.self, returning: [RefreshResult].self) { group in
             for target in targets {
                 group.addTask {
-                    let located = await client.resolve(ip: target.ip, mac: target.mac)
+                    let located = await client.resolve(ip: target.ip, mac: target.mac, ignoreBackoff: retry)
                     return RefreshResult(target: target, state: located?.state, resolvedIP: located?.ip)
                 }
             }
@@ -258,7 +266,10 @@ final class LightStore {
                 else if result.temp != nil { refreshedDevices[index].isColorMode = false }
                 refreshedDevices[index].sceneID = result.sceneId
                 refreshedDevices[index].speed = result.speed ?? refreshedDevices[index].speed
-                if !response.target.wasReachable { feedbackEvents.append((response.target.id, "Yeniden bağlandı", false, true)) }
+                // A successful query also clears a stale "command failed" message.
+                if !response.target.wasReachable || connectionFeedback[response.target.id]?.isError == true {
+                    feedbackEvents.append((response.target.id, "Yeniden bağlandı", false, true))
+                }
             } else {
                 let failures = (consecutiveRefreshFailures[response.target.id] ?? 0) + 1
                 consecutiveRefreshFailures[response.target.id] = failures

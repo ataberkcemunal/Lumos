@@ -146,6 +146,7 @@ final class MenuBarPanelController: NSObject, NSPopoverDelegate {
             _ = store.devices
             _ = store.favoriteColors
             _ = store.favoriteTemperatures
+            _ = store.connectionFeedback
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self, !self.isStopped else { return }

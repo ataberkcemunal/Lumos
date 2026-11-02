@@ -22,6 +22,7 @@ struct MenuBarView: View {
     @Environment(\.colorScheme) private var colorScheme
     @State private var isOpenHovered = false
     @State private var isQuitHovered = false
+    @State private var isRefreshHovered = false
 
     init(dismiss: @escaping () -> Void = {}) {
         self.dismiss = dismiss
@@ -77,6 +78,12 @@ struct MenuBarView: View {
                 }
                 .buttonStyle(.plain)
                 .onHover { isOpenHovered = $0 }
+                RefreshButton(width: 34, height: MenuLayout.footerButtonHeight)
+                    .background(
+                        Color.primary.opacity(isRefreshHovered ? 0.12 : 0.055),
+                        in: RoundedRectangle(cornerRadius: MenuLayout.footerCornerRadius)
+                    )
+                    .onHover { isRefreshHovered = $0 }
                 Button { NSApp.terminate(nil) } label: {
                     Image(systemName: "power")
                         .frame(width: 34, height: MenuLayout.footerButtonHeight)
@@ -139,76 +146,83 @@ private struct MenuBarLightRow: View {
                 Image(systemName: symbol).frame(width: MenuLayout.iconColumnWidth, height: 18)
                     .symbolRenderingMode(.monochrome)
                     .foregroundStyle(Color.secondary)
-                Text(device.name).font(.subheadline.weight(.medium))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(device.name).font(.subheadline.weight(.medium))
+                    LightStatusText(status: store.status(for: device))
+                }
                 Spacer()
-                CommandErrorIndicator(hasError: store.connectionFeedback[device.id]?.isError == true)
                 MixedPowerToggle(state: device.isReachable && device.isOn ? .on : .off, colors: [activeColor], action: {
                     Task { await store.setPower(!device.isOn, ids: [device.id]) }
                 }, compact: true)
+                .disabled(!device.isReachable)
+                .opacity(device.isReachable ? 1 : 0.48)
             }
 
-            HStack(spacing: MenuLayout.columnSpacing) {
-                Image(systemName: "sun.min")
-                    .foregroundStyle(.secondary)
-                    .frame(width: MenuLayout.iconColumnWidth, height: 18)
-                BrightnessSlider(value: $brightness, activeColor: activeColor, commit: {
-                    brightnessPreviewTask?.cancel()
-                    Task { await store.setBrightness(Int(brightness), id: device.id) }
-                }, liveChange: { value in
-                    brightnessPreviewTask?.cancel()
-                    let previewValue = Int(value)
-                    brightnessPreviewTask = Task {
-                        try? await Task.sleep(for: .milliseconds(45))
-                        guard !Task.isCancelled else { return }
-                        await store.previewBrightness(previewValue, id: device.id)
-                    }
-                }, editingChanged: { isDraggingBrightness = $0 }, compact: true)
-                    // The circular thumb is inset by half its diameter. Compensate
-                    // optically so the visible track starts on the shared content grid.
-                    .padding(.leading, -MenuLayout.compactThumbRadius)
-                Text("\(Int(brightness))%")
-                    .font(.caption2.monospacedDigit()).foregroundStyle(.primary.opacity(0.58))
-                    .frame(width: MenuLayout.valueColumnWidth, alignment: .trailing)
-            }
-
-            if !store.favoriteColors.isEmpty || !store.favoriteTemperatures.isEmpty {
+            // Dim only the controls so the name and connection status stay legible.
+            Group {
                 HStack(spacing: MenuLayout.columnSpacing) {
-                    Image(systemName: "heart.fill")
-                        .font(.caption)
+                    Image(systemName: "sun.min")
                         .foregroundStyle(.secondary)
                         .frame(width: MenuLayout.iconColumnWidth, height: 18)
-                    ForEach(store.favoriteTemperatures.prefix(5), id: \.self) { kelvin in
-                        Button { Task { await store.setTemperature(kelvin, id: device.id) } } label: {
-                            Circle().fill(whiteColor(for: kelvin)).frame(width: 16, height: 16)
-                                .overlay(
-                                    Circle()
-                                        .stroke(isSelected(kelvin: kelvin) ? Color.primary : .primary.opacity(0.15), lineWidth: isSelected(kelvin: kelvin) ? 1.5 : 1)
-                                        .frame(width: isSelected(kelvin: kelvin) ? 19 : 16, height: isSelected(kelvin: kelvin) ? 19 : 16)
-                                )
+                    BrightnessSlider(value: $brightness, activeColor: activeColor, commit: {
+                        brightnessPreviewTask?.cancel()
+                        Task { await store.setBrightness(Int(brightness), id: device.id) }
+                    }, liveChange: { value in
+                        brightnessPreviewTask?.cancel()
+                        let previewValue = Int(value)
+                        brightnessPreviewTask = Task {
+                            try? await Task.sleep(for: .milliseconds(45))
+                            guard !Task.isCancelled else { return }
+                            await store.previewBrightness(previewValue, id: device.id)
                         }
-                        .buttonStyle(.plain).help("\(kelvin) K")
-                    }
-                    ForEach(store.favoriteColors.prefix(5), id: \.self) { hex in
-                        Button {
-                            if let value = color(from: hex) { Task { await store.setColor(value, id: device.id) } }
-                        } label: {
-                            Circle().fill(color(from: hex) ?? .white).frame(width: 16, height: 16)
-                                .overlay(
-                                    Circle()
-                                        .stroke(isSelected(hex: hex) ? Color.primary : .primary.opacity(0.15), lineWidth: isSelected(hex: hex) ? 1.5 : 1)
-                                        .frame(width: isSelected(hex: hex) ? 19 : 16, height: isSelected(hex: hex) ? 19 : 16)
-                                )
+                    }, editingChanged: { isDraggingBrightness = $0 }, compact: true)
+                        // The circular thumb is inset by half its diameter. Compensate
+                        // optically so the visible track starts on the shared content grid.
+                        .padding(.leading, -MenuLayout.compactThumbRadius)
+                    Text("\(Int(brightness))%")
+                        .font(.caption2.monospacedDigit()).foregroundStyle(.primary.opacity(0.58))
+                        .frame(width: MenuLayout.valueColumnWidth, alignment: .trailing)
+                }
+
+                if !store.favoriteColors.isEmpty || !store.favoriteTemperatures.isEmpty {
+                    HStack(spacing: MenuLayout.columnSpacing) {
+                        Image(systemName: "heart.fill")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .frame(width: MenuLayout.iconColumnWidth, height: 18)
+                        ForEach(store.favoriteTemperatures.prefix(5), id: \.self) { kelvin in
+                            Button { Task { await store.setTemperature(kelvin, id: device.id) } } label: {
+                                Circle().fill(whiteColor(for: kelvin)).frame(width: 16, height: 16)
+                                    .overlay(
+                                        Circle()
+                                            .stroke(isSelected(kelvin: kelvin) ? Color.primary : .primary.opacity(0.15), lineWidth: isSelected(kelvin: kelvin) ? 1.5 : 1)
+                                            .frame(width: isSelected(kelvin: kelvin) ? 19 : 16, height: isSelected(kelvin: kelvin) ? 19 : 16)
+                                    )
+                            }
+                            .buttonStyle(.plain).help("\(kelvin) K")
                         }
-                        .buttonStyle(.plain).help("#\(hex.uppercased())")
+                        ForEach(store.favoriteColors.prefix(5), id: \.self) { hex in
+                            Button {
+                                if let value = color(from: hex) { Task { await store.setColor(value, id: device.id) } }
+                            } label: {
+                                Circle().fill(color(from: hex) ?? .white).frame(width: 16, height: 16)
+                                    .overlay(
+                                        Circle()
+                                            .stroke(isSelected(hex: hex) ? Color.primary : .primary.opacity(0.15), lineWidth: isSelected(hex: hex) ? 1.5 : 1)
+                                            .frame(width: isSelected(hex: hex) ? 19 : 16, height: isSelected(hex: hex) ? 19 : 16)
+                                    )
+                            }
+                            .buttonStyle(.plain).help("#\(hex.uppercased())")
+                        }
+                        Spacer(minLength: 0)
                     }
-                    Spacer(minLength: 0)
                 }
             }
+            .disabled(!device.isReachable)
+            .opacity(device.isReachable ? 1 : 0.48)
         }
         .padding(.horizontal, MenuLayout.horizontalInset)
         .padding(.vertical, MenuLayout.rowVerticalInset)
-        .disabled(!device.isReachable)
-        .opacity(device.isReachable ? 1 : 0.48)
         .onDisappear { brightnessPreviewTask?.cancel() }
         .onChange(of: device.brightness) { _, value in
             guard !isDraggingBrightness else { return }

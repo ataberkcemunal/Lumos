@@ -95,6 +95,7 @@ struct ContentView: View {
             Text(allLightsStatus).font(.callout).foregroundStyle(.primary.opacity(0.58))
             Spacer()
             aggregateErrorStatus
+            RefreshButton()
             MixedPowerToggle(state: allPowerState, colors: visibleDevices.filter(\.isOn).map { topIndicatorColor(for: $0) }) {
                 Task { await store.setPower(allPowerState != .on, ids: visibleDevices.map(\.id)) }
             }
@@ -120,9 +121,14 @@ struct ContentView: View {
     }
 
     private var allLightsStatus: String {
-        if visibleDevices.allSatisfy({ !$0.isOn }) { return "Tüm lambalar kapalı" }
-        if visibleDevices.allSatisfy(\.isOn) { return "Tüm lambalar açık" }
-        return "\(visibleDevices.first(where: \.isOn)?.name ?? "Bir lamba") açık"
+        if visibleDevices.isEmpty { return "Lambalara ulaşılamıyor" }
+        let power: String
+        if visibleDevices.count == 1, let only = visibleDevices.first { power = "\(only.name) \(only.isOn ? "açık" : "kapalı")" }
+        else if visibleDevices.allSatisfy({ !$0.isOn }) { power = "Tüm lambalar kapalı" }
+        else if visibleDevices.allSatisfy(\.isOn) { power = "Tüm lambalar açık" }
+        else { power = "\(visibleDevices.first(where: \.isOn)?.name ?? "Bir lamba") açık" }
+        let missing = store.devices.count - visibleDevices.count
+        return missing > 0 ? "\(power) · \(missing) lamba yanıt vermiyor" : power
     }
 
     private func topSymbol(for device: LightDevice) -> String {
@@ -191,6 +197,45 @@ struct CommandErrorIndicator: View {
     }
 }
 
+/// Connection state under a lamp's name: errors stay until resolved, successes fade.
+struct LightStatusText: View {
+    let status: ConnectionFeedback?
+
+    var body: some View {
+        if let status {
+            Text(status.message)
+                .font(.caption)
+                .foregroundStyle(status.isError ? Color.red : Color.secondary)
+                .lineLimit(1)
+        }
+    }
+}
+
+/// Re-queries every lamp, rescanning for missing ones without waiting out the backoff.
+struct RefreshButton: View {
+    @Environment(LightStore.self) private var store
+    var width: CGFloat = 28
+    var height: CGFloat = 28
+
+    var body: some View {
+        Button { Task { await store.refreshAll(retry: true) } } label: {
+            ZStack {
+                if store.isRefreshing {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Image(systemName: "arrow.clockwise")
+                }
+            }
+            .frame(width: width, height: height)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .disabled(store.isRefreshing)
+        .help(store.isRefreshing ? "Lambalar yenileniyor" : "Yenile ve yeniden dene")
+    }
+}
+
 private struct MinimalLightCard: View {
     @Environment(LightStore.self) private var store
     @Environment(\.colorScheme) private var colorScheme
@@ -239,121 +284,130 @@ private struct MinimalLightCard: View {
                         .foregroundStyle(Color.secondary)
                         .opacity(controlActiveState == .inactive ? 0.90 : 1)
                 }.frame(width: 50, height: 50)
-                Text(device.name).font(.body.weight(.semibold))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(device.name).font(.body.weight(.semibold))
+                    LightStatusText(status: store.status(for: device))
+                }
                 Spacer()
-                CommandErrorIndicator(hasError: store.connectionFeedback[device.id]?.isError == true)
                 MixedPowerToggle(state: device.isReachable && device.isOn ? .on : .off, colors: [indicatorColor]) {
                     Task { await store.setPower(!device.isOn, ids: [device.id]) }
                 }
+                .disabled(!device.isReachable)
+                .opacity(device.isReachable ? 1 : 0.48)
             }
-            Divider()
-            controlTitle("Parlaklık", value: "\(Int(brightness))%")
-            HStack(spacing: MainLayout.controlSpacing) {
-                Image(systemName: "sun.min")
-                    .foregroundStyle(.secondary)
-                    .frame(width: MainLayout.controlIconWidth)
-                BrightnessSlider(value: $brightness, activeColor: indicatorColor) {
-                    brightnessPreviewTask?.cancel()
-                    Task { await store.setBrightness(Int(brightness), id: device.id) }
-                } liveChange: { value in
-                    brightnessPreviewTask?.cancel()
-                    let previewValue = Int(value)
-                    brightnessPreviewTask = Task {
-                        try? await Task.sleep(for: .milliseconds(45))
-                        guard !Task.isCancelled else { return }
-                        await store.previewBrightness(previewValue, id: device.id)
-                    }
-                }
-                Image(systemName: "sun.max.fill")
-                    .foregroundStyle(.secondary)
-                    .frame(width: MainLayout.controlIconWidth)
-            }
-            .frame(height: MainLayout.controlHeight)
-            HStack(spacing: 10) {
-                Spacer()
-                Text("Beyaz").font(.subheadline.weight(device.isColorMode == true ? .regular : .semibold))
-                    .foregroundStyle(device.isColorMode == true ? Color.secondary : Color.primary)
-                NeutralModeToggle(isOn: colorModeToggle)
-                Text("Renkli").font(.subheadline.weight(device.isColorMode == true ? .semibold : .regular))
-                    .foregroundStyle(device.isColorMode == true ? Color.primary : Color.secondary)
-                Spacer()
-            }
-
-            if device.isColorMode == true {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Renk").font(.subheadline.weight(.medium))
-                        .frame(height: MainLayout.controlTitleHeight, alignment: .leading)
-                    InlineColorControl(color: $color) { value in
-                        colorPreviewTask?.cancel()
-                        Task { await store.setColor(value, id: device.id) }
-                    } live: { value in
-                        store.stageColorPreview(value, id: device.id)
-                        colorPreviewTask?.cancel()
-                        colorPreviewTask = Task {
-                            try? await Task.sleep(for: .milliseconds(45))
-                            guard !Task.isCancelled else { return }
-                            await store.previewColor(value, id: device.id)
-                        }
-                    }
-                }
-                .frame(height: MainLayout.detailSectionHeight, alignment: .top)
-            } else {
-                VStack(alignment: .leading, spacing: 10) {
-                Text("Beyaz Sıcaklığı").font(.subheadline.weight(.medium))
-                    .frame(height: MainLayout.controlTitleHeight, alignment: .leading)
+            // Dim only the controls so the name and connection status stay legible.
+            Group {
+                Divider()
+                controlTitle("Parlaklık", value: "\(Int(brightness))%")
                 HStack(spacing: MainLayout.controlSpacing) {
-                    Image(systemName: "sun.max.fill")
+                    Image(systemName: "sun.min")
                         .foregroundStyle(.secondary)
                         .frame(width: MainLayout.controlIconWidth)
-                    KelvinSlider(value: $temperature) {
-                        Task { await store.setTemperature(Int(temperature), id: device.id) }
+                    BrightnessSlider(value: $brightness, activeColor: indicatorColor) {
+                        brightnessPreviewTask?.cancel()
+                        Task { await store.setBrightness(Int(brightness), id: device.id) }
                     } liveChange: { value in
-                        Task { await store.previewTemperature(Int(value), id: device.id) }
+                        brightnessPreviewTask?.cancel()
+                        let previewValue = Int(value)
+                        brightnessPreviewTask = Task {
+                            try? await Task.sleep(for: .milliseconds(45))
+                            guard !Task.isCancelled else { return }
+                            await store.previewBrightness(previewValue, id: device.id)
+                        }
                     }
-                    Image(systemName: "snowflake")
+                    Image(systemName: "sun.max.fill")
                         .foregroundStyle(.secondary)
                         .frame(width: MainLayout.controlIconWidth)
                 }
                 .frame(height: MainLayout.controlHeight)
-                HStack(spacing: 9) {
-                    Button { store.toggleFavoriteTemperature(Int(temperature)) } label: {
-                        Image(systemName: store.favoriteTemperatures.contains(Int(temperature)) ? "heart.fill" : "heart").frame(width: 24, height: 24)
-                    }.buttonStyle(.borderless).foregroundStyle(.secondary).help("Favoriye ekle veya çıkar")
-                    ForEach(store.favoriteTemperatures.prefix(5), id: \.self) { value in
-                        Circle().fill(whiteColor(for: value)).frame(width: 25, height: 25)
-                            .overlay(
-                                Circle().stroke(
-                                    Int(temperature) == value ? Color.primary : .primary.opacity(0.15),
-                                    lineWidth: Int(temperature) == value ? 1.5 : 1
-                                )
-                                .frame(
-                                    width: Int(temperature) == value ? 28 : 25,
-                                    height: Int(temperature) == value ? 28 : 25
-                                )
-                            )
-                            .contentShape(Circle())
-                            .onTapGesture {
-                            temperature = Double(value)
-                            Task { await store.setTemperature(value, id: device.id) }
-                            }
-                            .help("\(value) K")
-                            .contextMenu { Button("Favoriden çıkar", role: .destructive) { store.removeFavoriteTemperature(value) } }
-                    }
+                HStack(spacing: 10) {
                     Spacer()
-                    Text("K").font(.caption.bold()).foregroundStyle(.secondary)
-                    ValidatedTextField(text: $kelvinInput, filter: { oldValue, value in
-                        let filtered = String(value.filter { $0.isNumber }.prefix(4))
-                        return filtered.isEmpty || isViableKelvinPrefix(filtered) ? filtered : oldValue
-                    }, onCommit: applyKelvinInput)
-                        .padding(.horizontal, 8)
-                        .frame(width: 76, height: 22)
-                        .background(Color.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 5))
-                        .overlay(RoundedRectangle(cornerRadius: 5).stroke(Color.primary.opacity(0.12), lineWidth: 1))
+                    Text("Beyaz").font(.subheadline.weight(device.isColorMode == true ? .regular : .semibold))
+                        .foregroundStyle(device.isColorMode == true ? Color.secondary : Color.primary)
+                    NeutralModeToggle(isOn: colorModeToggle)
+                    Text("Renkli").font(.subheadline.weight(device.isColorMode == true ? .semibold : .regular))
+                        .foregroundStyle(device.isColorMode == true ? Color.primary : Color.secondary)
+                    Spacer()
                 }
-                .opacity(controlActiveState == .inactive ? 0.90 : 1)
+
+                if device.isColorMode == true {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Renk").font(.subheadline.weight(.medium))
+                            .frame(height: MainLayout.controlTitleHeight, alignment: .leading)
+                        InlineColorControl(color: $color) { value in
+                            colorPreviewTask?.cancel()
+                            Task { await store.setColor(value, id: device.id) }
+                        } live: { value in
+                            store.stageColorPreview(value, id: device.id)
+                            colorPreviewTask?.cancel()
+                            colorPreviewTask = Task {
+                                try? await Task.sleep(for: .milliseconds(45))
+                                guard !Task.isCancelled else { return }
+                                await store.previewColor(value, id: device.id)
+                            }
+                        }
+                    }
+                    .frame(height: MainLayout.detailSectionHeight, alignment: .top)
+                } else {
+                    VStack(alignment: .leading, spacing: 10) {
+                    Text("Beyaz Sıcaklığı").font(.subheadline.weight(.medium))
+                        .frame(height: MainLayout.controlTitleHeight, alignment: .leading)
+                    HStack(spacing: MainLayout.controlSpacing) {
+                        Image(systemName: "sun.max.fill")
+                            .foregroundStyle(.secondary)
+                            .frame(width: MainLayout.controlIconWidth)
+                        KelvinSlider(value: $temperature) {
+                            Task { await store.setTemperature(Int(temperature), id: device.id) }
+                        } liveChange: { value in
+                            Task { await store.previewTemperature(Int(value), id: device.id) }
+                        }
+                        Image(systemName: "snowflake")
+                            .foregroundStyle(.secondary)
+                            .frame(width: MainLayout.controlIconWidth)
+                    }
+                    .frame(height: MainLayout.controlHeight)
+                    HStack(spacing: 9) {
+                        Button { store.toggleFavoriteTemperature(Int(temperature)) } label: {
+                            Image(systemName: store.favoriteTemperatures.contains(Int(temperature)) ? "heart.fill" : "heart").frame(width: 24, height: 24)
+                        }.buttonStyle(.borderless).foregroundStyle(.secondary).help("Favoriye ekle veya çıkar")
+                        ForEach(store.favoriteTemperatures.prefix(5), id: \.self) { value in
+                            Circle().fill(whiteColor(for: value)).frame(width: 25, height: 25)
+                                .overlay(
+                                    Circle().stroke(
+                                        Int(temperature) == value ? Color.primary : .primary.opacity(0.15),
+                                        lineWidth: Int(temperature) == value ? 1.5 : 1
+                                    )
+                                    .frame(
+                                        width: Int(temperature) == value ? 28 : 25,
+                                        height: Int(temperature) == value ? 28 : 25
+                                    )
+                                )
+                                .contentShape(Circle())
+                                .onTapGesture {
+                                temperature = Double(value)
+                                Task { await store.setTemperature(value, id: device.id) }
+                                }
+                                .help("\(value) K")
+                                .contextMenu { Button("Favoriden çıkar", role: .destructive) { store.removeFavoriteTemperature(value) } }
+                        }
+                        Spacer()
+                        Text("K").font(.caption.bold()).foregroundStyle(.secondary)
+                        ValidatedTextField(text: $kelvinInput, filter: { oldValue, value in
+                            let filtered = String(value.filter { $0.isNumber }.prefix(4))
+                            return filtered.isEmpty || isViableKelvinPrefix(filtered) ? filtered : oldValue
+                        }, onCommit: applyKelvinInput)
+                            .padding(.horizontal, 8)
+                            .frame(width: 76, height: 22)
+                            .background(Color.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 5))
+                            .overlay(RoundedRectangle(cornerRadius: 5).stroke(Color.primary.opacity(0.12), lineWidth: 1))
+                    }
+                    .opacity(controlActiveState == .inactive ? 0.90 : 1)
+                    }
+                    .frame(height: MainLayout.detailSectionHeight, alignment: .top)
                 }
-                .frame(height: MainLayout.detailSectionHeight, alignment: .top)
             }
+            .disabled(!device.isReachable)
+            .opacity(device.isReachable ? 1 : 0.48)
         }
         .padding(MainLayout.cardPadding)
         .frame(height: MainLayout.cardHeight, alignment: .center)
@@ -364,8 +418,6 @@ private struct MinimalLightCard: View {
             }
             .onChange(of: temperature) { _, value in kelvinInput = String(Int(value)) }
             .onChange(of: device.color) { _, value in color = value }
-            .disabled(!device.isReachable)
-            .opacity(device.isReachable ? 1 : 0.48)
             .lumosIsolatedGlassSurface(
                 tint: device.isReachable && device.isOn
                     ? indicatorColor.opacity(0.12)

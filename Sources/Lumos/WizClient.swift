@@ -24,7 +24,7 @@ actor WizClient {
     /// Only a matching hardware identity may replace a saved address. Discovery
     /// scans the subnet, so it is opt-in, shared by concurrent callers, and
     /// backs off per lamp while that lamp stays missing.
-    func resolve(ip: String, mac: String?, allowDiscovery: Bool = true) async -> LocatedLight? {
+    func resolve(ip: String, mac: String?, allowDiscovery: Bool = true, ignoreBackoff: Bool = false) async -> LocatedLight? {
         if let state = try? await command(ip: ip, method: "getPilot", expectsReply: true),
            state.state != nil, let identity = normalizedMAC(state.mac),
            mac == nil || normalizedMAC(mac) == identity {
@@ -32,7 +32,7 @@ actor WizClient {
             return LocatedLight(ip: ip, state: state)
         }
         guard allowDiscovery, let identity = normalizedMAC(mac) else { return nil }
-        if let backoff = discoveryBackoff[identity], ProcessInfo.processInfo.systemUptime < backoff.retryAt {
+        if !ignoreBackoff, let backoff = discoveryBackoff[identity], ProcessInfo.processInfo.systemUptime < backoff.retryAt {
             return nil
         }
         let lights = await sharedDiscovery()
