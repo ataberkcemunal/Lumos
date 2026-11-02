@@ -3,15 +3,6 @@ import SwiftUI
 
 extension View {
     @ViewBuilder
-    func lumosGlassSurface<S: Shape>(tint: Color? = nil, in shape: S) -> some View {
-        if #available(macOS 26.0, *) {
-            glassEffect(.regular.tint(tint), in: shape)
-        } else {
-            background(Color(nsColor: .controlBackgroundColor), in: shape)
-        }
-    }
-
-    @ViewBuilder
     func lumosIsolatedGlassSurface<S: Shape>(tint: Color? = nil, in shape: S) -> some View {
         if #available(macOS 26.0, *) {
             GlassEffectContainer(spacing: 0) {
@@ -35,15 +26,6 @@ extension View {
     }
 
     @ViewBuilder
-    func lumosGlassButtonStyle() -> some View {
-        if #available(macOS 26.0, *) {
-            buttonStyle(.glass(.clear.interactive()))
-        } else {
-            buttonStyle(.plain)
-        }
-    }
-
-    @ViewBuilder
     func lumosLegacyBorder<S: Shape>(_ shape: S, color: Color) -> some View {
         if #available(macOS 26.0, *) {
             self
@@ -52,14 +34,7 @@ extension View {
         }
     }
 
-    @ViewBuilder
-    func lumosLegacyButtonBackground(isHovered: Bool, cornerRadius: CGFloat = 7) -> some View {
-        if #available(macOS 26.0, *) {
-            self
-        } else {
-            background(Color.primary.opacity(isHovered ? 0.15 : 0.07), in: RoundedRectangle(cornerRadius: cornerRadius))
-        }
-    }
+
 }
 
 struct LumosWindowBackground: View {

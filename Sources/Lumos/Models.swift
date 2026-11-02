@@ -67,33 +67,3 @@ struct LightDevice: Identifiable, Codable, Hashable {
 
     var color: Color { Color(red: Double(red)/255, green: Double(green)/255, blue: Double(blue)/255) }
 }
-
-struct LightScene: Identifiable, Hashable {
-    let id: Int
-    let name: String
-    let symbol: String
-    let colors: [Color]
-}
-
-enum NavigationItem: String, CaseIterable, Identifiable {
-    case home = "Genel Bakış"
-    case lights = "Işıklar"
-    case scenes = "Sahneler"
-    var id: String { rawValue }
-    var symbol: String { switch self { case .home: "sparkles"; case .lights: "lightbulb.led"; case .scenes: "square.stack.3d.up.fill" } }
-}
-
-let wizScenes: [LightScene] = [
-    .init(id: 1, name: "Okyanus", symbol: "water.waves", colors: [.cyan, .blue]),
-    .init(id: 2, name: "Romantik", symbol: "heart.fill", colors: [.pink, .red]),
-    .init(id: 3, name: "Gün Batımı", symbol: "sun.horizon.fill", colors: [.orange, .pink]),
-    .init(id: 4, name: "Parti", symbol: "party.popper.fill", colors: [.purple, .blue, .pink]),
-    .init(id: 5, name: "Şömine", symbol: "flame.fill", colors: [.red, .orange]),
-    .init(id: 6, name: "Rahatlama", symbol: "leaf.fill", colors: [.green, .cyan]),
-    .init(id: 7, name: "Pastel", symbol: "paintpalette.fill", colors: [.mint, .pink]),
-    .init(id: 8, name: "Uyanış", symbol: "sunrise.fill", colors: [.yellow, .orange]),
-    .init(id: 9, name: "Yatak Zamanı", symbol: "moon.stars.fill", colors: [.indigo, .purple]),
-    .init(id: 10, name: "Sıcak", symbol: "sun.max.fill", colors: [.yellow, .orange]),
-    .init(id: 11, name: "Gündüz", symbol: "cloud.sun.fill", colors: [.white, .cyan]),
-    .init(id: 12, name: "Soğuk Beyaz", symbol: "snowflake", colors: [.white, .blue])
-]

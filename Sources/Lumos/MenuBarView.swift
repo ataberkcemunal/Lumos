@@ -184,7 +184,7 @@ private struct MenuBarLightRow: View {
                         // optically so the visible track starts on the shared content grid.
                         .padding(.leading, -MenuLayout.compactThumbRadius)
                     Text("\(Int(brightness))%")
-                        .font(.caption2.monospacedDigit()).foregroundStyle(.primary.opacity(0.58))
+                        .font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
                         .frame(width: MenuLayout.valueColumnWidth, alignment: .trailing)
                 }
 
@@ -194,7 +194,7 @@ private struct MenuBarLightRow: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .frame(width: MenuLayout.iconColumnWidth, height: 18)
-                        ForEach(store.favoriteTemperatures.prefix(5), id: \.self) { kelvin in
+                        ForEach(store.favoriteTemperatures.prefix(LightStore.maximumFavoritesPerKind), id: \.self) { kelvin in
                             Button { applyTemperature(kelvin) } label: {
                                 Circle().fill(whiteColor(for: kelvin)).frame(width: 16, height: 16)
                                     .overlay(
@@ -207,7 +207,7 @@ private struct MenuBarLightRow: View {
                             .keyboardActivatable(Circle()) { applyTemperature(kelvin) }
                             .help("\(kelvin) K")
                         }
-                        ForEach(store.favoriteColors.prefix(5), id: \.self) { hex in
+                        ForEach(store.favoriteColors.prefix(LightStore.maximumFavoritesPerKind), id: \.self) { hex in
                             Button { applyColor(hex) } label: {
                                 Circle().fill(color(from: hex) ?? .white).frame(width: 16, height: 16)
                                     .overlay(

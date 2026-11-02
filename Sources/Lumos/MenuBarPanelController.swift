@@ -29,6 +29,7 @@ final class MenuBarPanelController: NSObject, NSPopoverDelegate {
             button.setAccessibilityLabel("Lumos — ışık kontrolleri")
             button.target = self
             button.action = #selector(togglePopover(_:))
+            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
 
         // Controls live in a regular window, outside NSMenu's tracking loop.
@@ -53,6 +54,11 @@ final class MenuBarPanelController: NSObject, NSPopoverDelegate {
 
     @objc func togglePopover(_ sender: Any?) {
         guard !isStopped else { return }
+        if let event = NSApp.currentEvent,
+           event.type == .rightMouseUp || event.modifierFlags.contains(.control) {
+            showContextMenu()
+            return
+        }
         if popover.isShown {
             dismiss()
             return
@@ -74,6 +80,18 @@ final class MenuBarPanelController: NSObject, NSPopoverDelegate {
             DispatchQueue.main.async { window.makeFirstResponder(nil) }
         }
         refresh()
+    }
+
+    /// Right-click (or Control-click) shows a plain menu with Quit. The menu is
+    /// attached only while it is tracking, so left clicks keep opening the popover.
+    private func showContextMenu() {
+        guard let statusItem, let button = statusItem.button else { return }
+        dismiss()
+        let menu = NSMenu()
+        menu.addItem(withTitle: "Lumos’tan Çık", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        statusItem.menu = menu
+        button.performClick(nil)
+        statusItem.menu = nil
     }
 
     func dismiss() {

@@ -22,8 +22,6 @@ private struct RefreshResult: Sendable {
 @MainActor @Observable
 final class LightStore {
     var devices: [LightDevice]
-    var selection: NavigationItem? = .home
-    var selectedDeviceID: UUID?
     var isRefreshing = false
     var toast: String?
     var favoriteColors: [String] = []
@@ -69,8 +67,6 @@ final class LightStore {
         persist()
     }
 
-    var allOn: Bool { !devices.isEmpty && devices.allSatisfy(\.isOn) }
-    var onlineCount: Int { devices.filter(\.isReachable).count }
 
     /// The connection message to show under a lamp's name, if any.
     func status(for device: LightDevice) -> ConnectionFeedback? {
@@ -80,25 +76,29 @@ final class LightStore {
 
     func persist() { if let data = try? JSONEncoder().encode(devices) { UserDefaults.standard.set(data, forKey: "lumos.devices") } }
 
-    func add(name: String, ip: String, room: String) {
-        devices.append(LightDevice(name: name, ip: ip, room: room)); persist()
-    }
+    /// The menu bar row fits eight swatches in total; a card row fits five of
+    /// one kind beside its input field. A full list never drops a favorite.
+    static let maximumFavorites = 8
+    static let maximumFavoritesPerKind = 5
+    static let fullFavoritesHelp = "Favoriler dolu — eklemek için birini sağ tıklayıp çıkarın"
 
-    func remove(_ device: LightDevice) { devices.removeAll { $0.id == device.id }; persist() }
+    private var hasFavoriteRoom: Bool { favoriteColors.count + favoriteTemperatures.count < Self.maximumFavorites }
+    var canAddFavoriteColor: Bool { hasFavoriteRoom && favoriteColors.count < Self.maximumFavoritesPerKind }
+    var canAddFavoriteTemperature: Bool { hasFavoriteRoom && favoriteTemperatures.count < Self.maximumFavoritesPerKind }
 
     func toggleFavoriteColor(_ hex: String) {
         let value = hex.uppercased()
         if let index = favoriteColors.firstIndex(of: value) { favoriteColors.remove(at: index) }
-        else { favoriteColors.append(value) }
-        if favoriteColors.count > 5 { favoriteColors.removeFirst(favoriteColors.count - 5) }
+        else if canAddFavoriteColor { favoriteColors.append(value) }
+        else { return }
         UserDefaults.standard.set(favoriteColors, forKey: "lumos.favoriteColors")
     }
 
     func toggleFavoriteTemperature(_ value: Int) {
         if let index = favoriteTemperatures.firstIndex(of: value) { favoriteTemperatures.remove(at: index) }
-        else { favoriteTemperatures.append(value) }
+        else if canAddFavoriteTemperature { favoriteTemperatures.append(value) }
+        else { return }
         favoriteTemperatures.sort()
-        if favoriteTemperatures.count > 5 { favoriteTemperatures.removeFirst(favoriteTemperatures.count - 5) }
         UserDefaults.standard.set(favoriteTemperatures, forKey: "lumos.favoriteTemperatures")
     }
 
@@ -209,19 +209,6 @@ final class LightStore {
         update(id) { $0.isOn = true; $0.red = r; $0.green = g; $0.blue = b; $0.sceneID = nil; $0.isColorMode = true }
         if wasOff { playPowerSound(isOn: true) }
         await send(id: id, params: ["state": .bool(true), "r": .int(r), "g": .int(g), "b": .int(b)], isPreview: true)
-    }
-
-    func applyScene(_ scene: LightScene) async {
-        for device in devices {
-            await send(id: device.id, params: ["state": .bool(true), "sceneId": .int(scene.id), "speed": .int(device.speed)])
-            update(device.id) { $0.isOn = true; $0.sceneID = scene.id }
-        }
-        toast = "\(scene.name) sahnesi etkin"; persist()
-    }
-
-    func setSpeed(_ value: Int, id: UUID) async {
-        update(id) { $0.speed = value }
-        await send(id: id, params: ["speed": .int(value)]); persist()
     }
 
     /// A user-requested refresh (`retry`) rescans for missing lamps immediately

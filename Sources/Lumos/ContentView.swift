@@ -73,9 +73,12 @@ struct ContentView: View {
             guard let window = notification.object as? NSWindow, window.title == "Lumos" else { return }
             isWindowFocused = false
         }
-        .onChange(of: store.toast) { _, value in
-            guard value != nil else { return }
-            Task { try? await Task.sleep(for: .seconds(2)); withAnimation { store.toast = nil } }
+        // Restarts with each message, so an older timer cannot hide a newer toast.
+        .task(id: store.toast) {
+            guard store.toast != nil else { return }
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled else { return }
+            withAnimation { store.toast = nil }
         }
     }
 
@@ -89,10 +92,9 @@ struct ContentView: View {
                 }
             }
             .font(.title3)
-            .opacity(isWindowFocused ? 1 : 0.90)
             Text("Tüm Lambalar").font(.body.weight(.semibold))
             Text("•").foregroundStyle(.tertiary)
-            Text(allLightsStatus).font(.callout).foregroundStyle(.primary.opacity(0.58))
+            Text(allLightsStatus).font(.callout).foregroundStyle(.secondary)
             Spacer()
             aggregateErrorStatus
             RefreshButton()
@@ -159,7 +161,6 @@ private struct WindowDragRegion: NSViewRepresentable {
 enum MixedPowerState { case off, mixed, on }
 
 struct MixedPowerToggle: View {
-    @Environment(\.controlActiveState) private var controlActiveState
     let state: MixedPowerState
     let colors: [Color]
     let action: () -> Void
@@ -175,7 +176,6 @@ struct MixedPowerToggle: View {
                     .offset(x: state == .off ? (compact ? -10 : -12) : state == .mixed ? 0 : (compact ? 10 : 12))
             }
             .frame(width: compact ? 44 : 52, height: compact ? 24 : 28)
-            .opacity(controlActiveState == .inactive ? 0.90 : 1)
         }
         .buttonStyle(.plain)
         .keyboardActivatable(Capsule(), action: action)
@@ -249,7 +249,6 @@ struct RefreshButton: View {
 private struct MinimalLightCard: View {
     @Environment(LightStore.self) private var store
     @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.controlActiveState) private var controlActiveState
     let device: LightDevice
     @State private var brightness: Double
     @State private var brightnessPreviewTask: Task<Void, Never>?
@@ -292,7 +291,6 @@ private struct MinimalLightCard: View {
                         .symbolRenderingMode(.monochrome)
                         .font(.title2)
                         .foregroundStyle(Color.secondary)
-                        .opacity(controlActiveState == .inactive ? 0.90 : 1)
                 }.frame(width: 50, height: 50)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(device.name).font(.body.weight(.semibold))
@@ -378,12 +376,14 @@ private struct MinimalLightCard: View {
                     .frame(height: MainLayout.controlHeight)
                     HStack(spacing: 9) {
                         Button { store.toggleFavoriteTemperature(Int(temperature)) } label: {
-                            Image(systemName: store.favoriteTemperatures.contains(Int(temperature)) ? "heart.fill" : "heart").frame(width: 24, height: 24)
+                            Image(systemName: isFavoriteTemperature ? "heart.fill" : "heart").frame(width: 24, height: 24)
                         }
                         .buttonStyle(.borderless)
                         .keyboardActivatable(Circle()) { store.toggleFavoriteTemperature(Int(temperature)) }
-                        .foregroundStyle(.secondary).help("Favoriye ekle veya çıkar")
-                        ForEach(store.favoriteTemperatures.prefix(5), id: \.self) { value in
+                        .foregroundStyle(.secondary)
+                        .disabled(!isFavoriteTemperature && !store.canAddFavoriteTemperature)
+                        .help(isFavoriteTemperature || store.canAddFavoriteTemperature ? "Favoriye ekle veya çıkar" : LightStore.fullFavoritesHelp)
+                        ForEach(store.favoriteTemperatures.prefix(LightStore.maximumFavoritesPerKind), id: \.self) { value in
                             Circle().fill(whiteColor(for: value)).frame(width: 25, height: 25)
                                 .overlay(
                                     Circle().stroke(
@@ -412,7 +412,6 @@ private struct MinimalLightCard: View {
                             .background(Color.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 5))
                             .overlay(RoundedRectangle(cornerRadius: 5).stroke(Color.primary.opacity(0.12), lineWidth: 1))
                     }
-                    .opacity(controlActiveState == .inactive ? 0.90 : 1)
                     }
                     .frame(height: MainLayout.detailSectionHeight, alignment: .top)
                 }
@@ -444,7 +443,7 @@ private struct MinimalLightCard: View {
     }
 
     private func controlTitle(_ title: String, value: String) -> some View {
-        HStack { Text(title).font(.subheadline.weight(.medium)); Spacer(); Text(value).font(.caption.monospacedDigit()).foregroundStyle(.primary.opacity(0.58)) }
+        HStack { Text(title).font(.subheadline.weight(.medium)); Spacer(); Text(value).font(.caption.monospacedDigit()).foregroundStyle(.secondary) }
             .frame(height: MainLayout.controlTitleHeight)
     }
 
@@ -456,6 +455,8 @@ private struct MinimalLightCard: View {
     private func whiteColor(for kelvin: Int) -> Color {
         whiteTemperatureColor(kelvin)
     }
+
+    private var isFavoriteTemperature: Bool { store.favoriteTemperatures.contains(Int(temperature)) }
 
     private func applyFavoriteTemperature(_ value: Int) {
         temperature = Double(value)
@@ -482,7 +483,6 @@ private struct MinimalLightCard: View {
 }
 
 private struct NeutralModeToggle: View {
-    @Environment(\.controlActiveState) private var controlActiveState
     @Binding var isOn: Bool
 
     var body: some View {
@@ -499,7 +499,6 @@ private struct NeutralModeToggle: View {
                     .offset(x: isOn ? 9 : -9)
             }
             .frame(width: 40, height: 22)
-            .opacity(controlActiveState == .inactive ? 0.90 : 1)
         }
         .buttonStyle(.plain)
         .keyboardActivatable(Capsule()) { isOn.toggle() }
@@ -619,7 +618,6 @@ private struct KeyboardAdjustable: ViewModifier {
 }
 
 struct BrightnessSlider: View {
-    @Environment(\.controlActiveState) private var controlActiveState
     @Binding var value: Double
     @State private var isDragging = false
     let activeColor: Color
@@ -672,7 +670,6 @@ struct BrightnessSlider: View {
         }
         .frame(height: compact ? 22 : 26)
         .keyboardAdjustable(value: $value, in: minimum...maximum, step: 5, live: liveChange, commit: commit)
-        .opacity(controlActiveState == .inactive ? 0.90 : 1)
         .accessibilityLabel("Parlaklık")
         .accessibilityValue("Yüzde \(Int(value))")
     }
@@ -680,7 +677,6 @@ struct BrightnessSlider: View {
 
 private struct KelvinSlider: View {
     @Environment(LightStore.self) private var store
-    @Environment(\.controlActiveState) private var controlActiveState
     @Binding var value: Double
     let commit: () -> Void
     let liveChange: (Double) -> Void
@@ -732,7 +728,6 @@ private struct KelvinSlider: View {
         }
         .frame(height: 26)
         .keyboardAdjustable(value: $value, in: minimum...maximum, step: 100, live: liveChange, commit: commit)
-        .opacity(controlActiveState == .inactive ? 0.90 : 1)
         .accessibilityLabel("Beyaz sıcaklığı")
         .accessibilityValue("\(Int(value)) Kelvin")
     }
@@ -751,7 +746,6 @@ private struct KelvinSlider: View {
 private struct InlineColorControl: View {
     @Environment(LightStore.self) private var store
     @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.controlActiveState) private var controlActiveState
     @Binding var color: Color
     let commit: (Color) -> Void
     let live: (Color) -> Void
@@ -787,12 +781,14 @@ private struct InlineColorControl: View {
             .frame(height: MainLayout.controlHeight)
             HStack(spacing: 9) {
                 Button { store.toggleFavoriteColor(hex) } label: {
-                    Image(systemName: store.favoriteColors.contains(hex.uppercased()) ? "heart.fill" : "heart").frame(width: 24, height: 24)
+                    Image(systemName: isFavoriteColor ? "heart.fill" : "heart").frame(width: 24, height: 24)
                 }
                 .buttonStyle(.borderless)
                 .keyboardActivatable(Circle()) { store.toggleFavoriteColor(hex) }
-                .foregroundStyle(.secondary).help("Favoriye ekle veya çıkar")
-                ForEach(store.favoriteColors.prefix(5), id: \.self) { value in
+                .foregroundStyle(.secondary)
+                .disabled(!isFavoriteColor && !store.canAddFavoriteColor)
+                .help(isFavoriteColor || store.canAddFavoriteColor ? "Favoriye ekle veya çıkar" : LightStore.fullFavoritesHelp)
+                ForEach(store.favoriteColors.prefix(LightStore.maximumFavoritesPerKind), id: \.self) { value in
                     Circle().fill(Self.color(from: value) ?? .white).frame(width: 25, height: 25)
                         .overlay(
                             Circle().stroke(
@@ -813,9 +809,7 @@ private struct InlineColorControl: View {
                 Spacer()
                 Text("HEX").font(.caption.bold()).foregroundStyle(.secondary)
                 ValidatedTextField(text: $hex, filter: { oldValue, value in
-                    let filtered = String(value.uppercased().filter { $0.isHexDigit }.prefix(6))
-                    if filtered.count == 6 && !Self.isSliderGeneratedHex(filtered) { return oldValue }
-                    return filtered
+                    String(value.uppercased().filter { $0.isHexDigit }.prefix(6))
                 }, onCommit: { apply(hex: hex, shouldCommit: true) })
                     .padding(.horizontal, 8)
                     .frame(width: 76, height: 22)
@@ -831,8 +825,9 @@ private struct InlineColorControl: View {
                 updateColor(commitChange: false, liveChange: true)
             }
         }
-        .opacity(controlActiveState == .inactive ? 0.90 : 1)
     }
+
+    private var isFavoriteColor: Bool { store.favoriteColors.contains(hex.uppercased()) }
 
     private var favoriteComponents: [(hue: Double, saturation: Double)] {
         store.favoriteColors.compactMap { value in
@@ -875,9 +870,17 @@ private struct InlineColorControl: View {
 
     private func apply(hex value: String, shouldCommit: Bool) {
         let clean = value.trimmingCharacters(in: CharacterSet(charactersIn: "# ")).uppercased()
-        guard Self.isSliderGeneratedHex(clean), let selected = Self.color(from: clean) else {
+        guard clean.count == 6 else {
             hex = Self.hexString(color)
             return
+        }
+        guard let adjusted = Self.fullIntensityHex(clean), let selected = Self.color(from: adjusted) else {
+            hex = Self.hexString(color)
+            store.toast = "#\(clean) uygulanamadı: siyah bir renk değil, kapalı ışıktır"
+            return
+        }
+        if adjusted != clean {
+            store.toast = "#\(clean) → #\(adjusted) olarak uygulandı; koyuluğu parlaklıkla ayarlayın"
         }
         let source = NSColor(selected).usingColorSpace(.deviceRGB) ?? .white
         var h: CGFloat = 0, s: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
@@ -897,12 +900,14 @@ private struct InlineColorControl: View {
         return Color(red: Double((value >> 16) & 255) / 255, green: Double((value >> 8) & 255) / 255, blue: Double(value & 255) / 255)
     }
 
-    private static func isSliderGeneratedHex(_ hex: String) -> Bool {
-        guard hex.count == 6, let value = Int(hex, radix: 16) else { return false }
-        let red = (value >> 16) & 255
-        let green = (value >> 8) & 255
-        let blue = value & 255
-        return max(red, green, blue) == 255
+    /// Brightness has its own slider, so a color always runs at full intensity:
+    /// scale the channels until the strongest reaches 255. Black has no hue.
+    private static func fullIntensityHex(_ hex: String) -> String? {
+        guard hex.count == 6, let value = Int(hex, radix: 16) else { return nil }
+        let channels = [(value >> 16) & 255, (value >> 8) & 255, value & 255]
+        guard let peak = channels.max(), peak > 0 else { return nil }
+        let scaled = channels.map { Int((Double($0) * 255 / Double(peak)).rounded()) }
+        return String(format: "%02X%02X%02X", scaled[0], scaled[1], scaled[2])
     }
 }
 

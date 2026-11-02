@@ -8,8 +8,9 @@ Lumos is a modern macOS app for controlling two WiZ lights over your local netwo
 - Live brightness control
 - White temperature control from 2,200 K to 6,500 K
 - Color and HEX selection
-- Up to five color and white-temperature favorites
-- Compact menu bar controls
+- Up to eight favorites in total, at most five colors and five white temperatures
+- Compact menu bar controls; right-click the menu bar icon to quit
+- Full keyboard control: Tab moves between controls, arrow keys adjust sliders, ⌘R refreshes
 - Connection status monitoring and automatic refresh after wake
 - Local-network operation with no external server or account required
 
@@ -56,7 +57,7 @@ Writes reuse an identity confirmed within the last minute, so each command is a
 single packet. Commands to a lamp are sent one at a time in order, and slider
 previews never trigger a subnet scan. A missing lamp is rescanned with backoff
 (15 s doubling to 5 min). Run `sh scripts/test-command-path.sh` for offline checks
-against a fake lamp on `127.0.0.1`.
+against a fake lamp on `127.0.0.1` and of the favorite limits.
 
 ### Menu bar lifecycle
 
