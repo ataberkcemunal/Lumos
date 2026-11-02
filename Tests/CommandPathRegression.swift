@@ -105,6 +105,14 @@ private final class Counter: @unchecked Sendable {
         // 20 waits on the slow identity check; 30 and 35 queue behind it and are superseded.
         precondition(result.dimmings == [20, 40], "Expected [20, 40], got \(result.dimmings)")
         precondition(scans.count == 1, "Writes to a reachable lamp must not scan")
+
+        // A refresh whose query went out before a user change must not revert the screen.
+        // The fake lamp always reports 50%; the user sets 60% while the query is pending.
+        let refresh = Task { await store.refreshAll() }
+        try? await Task.sleep(for: .milliseconds(100))
+        await store.setBrightness(60, id: id)
+        await refresh.value
+        precondition(store.devices[0].brightness == 60, "Refresh reverted a newer change to \(store.devices[0].brightness)")
         print("PASS: command path — no preview scans, shared/backed-off discovery, identity cached, ordered writes \(result.dimmings)")
     }
 }

@@ -18,6 +18,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
+    /// Clicking the Dock icon, or opening Lumos again from Finder, shows the window.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        if !hasVisibleWindows { MainWindowPresenter.shared.show(store: store) }
+        return true
+    }
+
     private func installMainMenu() {
         let mainMenu = NSMenu()
 

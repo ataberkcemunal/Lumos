@@ -68,11 +68,14 @@ final class MenuBarPanelController: NSObject, NSPopoverDelegate {
         guard let button = statusItem?.button, button.window?.screen != nil else { return }
         prepareContent()
         resizeContent()
+        // Anchor first, on the menu bar that was clicked. Activating beforehand can
+        // move menu bar focus to the display holding Lumos's window, which shifts
+        // the status button and opens the panel on the wrong monitor.
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        button.highlight(popover.isShown)
         // An accessory app is not active by itself; without activation, Tab and
         // arrow keys would go to the previously frontmost app.
         NSApp.activate()
-        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-        button.highlight(popover.isShown)
         if let window = popover.contentViewController?.view.window {
             window.makeKey()
             // Start without a focused control so a stray Space cannot switch lamps;

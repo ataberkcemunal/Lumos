@@ -204,6 +204,7 @@ private struct MenuBarLightRow: View {
                                     )
                             }
                             .buttonStyle(.plain)
+                            .hoverGrow()
                             .keyboardActivatable(Circle()) { applyTemperature(kelvin) }
                             .help("\(kelvin) K")
                         }
@@ -221,6 +222,7 @@ private struct MenuBarLightRow: View {
                                     )
                             }
                             .buttonStyle(.plain)
+                            .hoverGrow()
                             .keyboardActivatable(Circle()) { applyColor(hex) }
                             .help("#\(hex.uppercased())")
                         }
@@ -289,12 +291,15 @@ final class MainWindowPresenter: NSObject, NSWindowDelegate {
     static let shared = MainWindowPresenter()
     private var window: NSWindow?
 
+    private static let contentSize = NSSize(width: 820, height: 466)
+
     func show(store: LightStore) {
-        // Keep the accessory policy stable while opening and closing windows.
-        // Switching policy here needlessly rebuilds Dock and application-menu state.
+        // While the window is open Lumos behaves like a regular app (Dock, Cmd-Tab,
+        // Stage Manager); closing it returns to a menu bar-only accessory.
+        NSApp.setActivationPolicy(.regular)
         if window == nil {
             let created = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 820, height: 466),
+                contentRect: NSRect(origin: .zero, size: Self.contentSize),
                 styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
                 backing: .buffered,
                 defer: false
@@ -306,17 +311,29 @@ final class MainWindowPresenter: NSObject, NSWindowDelegate {
             created.isOpaque = false
             created.backgroundColor = .clear
             created.level = .normal
-            created.collectionBehavior = []
             created.isMovableByWindowBackground = true
             created.isReleasedWhenClosed = false
-            let content = ContentView()
-                .environment(store)
-            created.contentView = NSHostingView(rootView: content)
-            created.center()
+            // The layout is fixed-size. Without these, SwiftUI re-measures on a
+            // display change and the window jumps or resizes while being dragged
+            // to another monitor.
+            created.contentMinSize = Self.contentSize
+            created.contentMaxSize = Self.contentSize
+            let host = NSHostingView(rootView: ContentView().environment(store))
+            host.sizingOptions = []
+            if #available(macOS 26.0, *) {
+                let glass = NSGlassEffectView()
+                glass.contentView = host
+                created.contentView = glass
+            } else {
+                created.contentView = host
+            }
+            created.setContentSize(Self.contentSize)
+            created.setFrameAutosaveName("LumosMainWindow")
+            if !created.setFrameUsingName("LumosMainWindow") { created.center() }
             created.delegate = self
             window = created
         }
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.activate()
         window?.makeKeyAndOrderFront(nil)
         DispatchQueue.main.async { [weak window] in
             window?.makeFirstResponder(nil)
@@ -325,6 +342,7 @@ final class MainWindowPresenter: NSObject, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         window = nil
+        NSApp.setActivationPolicy(.accessory)
     }
 
 }

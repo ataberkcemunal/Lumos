@@ -36,6 +36,10 @@ final class LightStore {
     private var verifiedAt: [UUID: TimeInterval] = [:]
     private var commandTails: [UUID: Task<Bool, Never>] = [:]
     private var commandTickets: [UUID: Int] = [:]
+    /// Commands queued or in flight, and when the last one was requested. A refresh
+    /// must not overwrite a lamp the user changed while its query was out.
+    private var pendingCommands: [UUID: Int] = [:]
+    private var lastCommandRequest: [UUID: TimeInterval] = [:]
     /// Lamps switched on implicitly by a slider or swatch; the sound plays
     /// once a command to the lamp actually succeeds.
     private var powerOnSoundPending: Set<UUID> = []
@@ -222,6 +226,7 @@ final class LightStore {
         guard !isRefreshing else { return }
         isRefreshing = true
         defer { isRefreshing = false; persist() }
+        let startedAt = ProcessInfo.processInfo.systemUptime
         let targets = devices.map { RefreshTarget(id: $0.id, ip: $0.ip, mac: $0.mac, wasReachable: $0.isReachable) }
         let client = self.client
         let results = await withTaskGroup(of: RefreshResult.self, returning: [RefreshResult].self) { group in
@@ -248,16 +253,20 @@ final class LightStore {
                 verifiedAt[response.target.id] = ProcessInfo.processInfo.systemUptime
                 consecutiveRefreshFailures[response.target.id] = 0
                 refreshedDevices[index].isReachable = true
-                refreshedDevices[index].isOn = result.state ?? refreshedDevices[index].isOn
-                refreshedDevices[index].brightness = result.dimming ?? refreshedDevices[index].brightness
-                refreshedDevices[index].temperature = result.temp ?? refreshedDevices[index].temperature
-                refreshedDevices[index].red = result.r ?? refreshedDevices[index].red
-                refreshedDevices[index].green = result.g ?? refreshedDevices[index].green
-                refreshedDevices[index].blue = result.b ?? refreshedDevices[index].blue
-                if result.r != nil || result.g != nil || result.b != nil { refreshedDevices[index].isColorMode = true }
-                else if result.temp != nil { refreshedDevices[index].isColorMode = false }
-                refreshedDevices[index].sceneID = result.sceneId
-                refreshedDevices[index].speed = result.speed ?? refreshedDevices[index].speed
+                let id = response.target.id
+                let changedDuringQuery = (pendingCommands[id] ?? 0) > 0 || (lastCommandRequest[id] ?? -.infinity) >= startedAt
+                if !changedDuringQuery {
+                    refreshedDevices[index].isOn = result.state ?? refreshedDevices[index].isOn
+                    refreshedDevices[index].brightness = result.dimming ?? refreshedDevices[index].brightness
+                    refreshedDevices[index].temperature = result.temp ?? refreshedDevices[index].temperature
+                    refreshedDevices[index].red = result.r ?? refreshedDevices[index].red
+                    refreshedDevices[index].green = result.g ?? refreshedDevices[index].green
+                    refreshedDevices[index].blue = result.b ?? refreshedDevices[index].blue
+                    if result.r != nil || result.g != nil || result.b != nil { refreshedDevices[index].isColorMode = true }
+                    else if result.temp != nil { refreshedDevices[index].isColorMode = false }
+                    refreshedDevices[index].sceneID = result.sceneId
+                    refreshedDevices[index].speed = result.speed ?? refreshedDevices[index].speed
+                }
                 // A successful query also clears a stale "command failed" message.
                 if !response.target.wasReachable || connectionFeedback[response.target.id]?.isError == true {
                     feedbackEvents.append((response.target.id, "Yeniden bağlandı", false, true))
@@ -290,6 +299,9 @@ final class LightStore {
     ) async -> Bool {
         let ticket = (commandTickets[id] ?? 0) + 1
         commandTickets[id] = ticket
+        lastCommandRequest[id] = ProcessInfo.processInfo.systemUptime
+        pendingCommands[id, default: 0] += 1
+        defer { pendingCommands[id, default: 1] -= 1 }
         let previous = commandTails[id]
         let command = Task { @MainActor [weak self] () -> Bool in
             _ = await previous?.value

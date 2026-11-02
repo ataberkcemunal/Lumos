@@ -2,14 +2,12 @@ import AppKit
 import SwiftUI
 
 extension View {
+    /// A card surface: the system Liquid Glass material, tinted with the lamp's
+    /// color through the glass effect's own tint on macOS 26 and later.
     @ViewBuilder
-    func lumosIsolatedGlassSurface<S: Shape>(tint: Color? = nil, in shape: S) -> some View {
+    func lumosGlassSurface<S: Shape>(tint: Color? = nil, in shape: S) -> some View {
         if #available(macOS 26.0, *) {
-            GlassEffectContainer(spacing: 0) {
-                background(shape.fill(tint ?? .clear))
-                    .glassEffect(.regular, in: shape)
-            }
-            .clipShape(shape)
+            glassEffect(.regular.tint(tint), in: shape)
         } else {
             background(Color(nsColor: .controlBackgroundColor), in: shape)
                 .overlay(shape.fill(tint ?? .clear).allowsHitTesting(false))
@@ -33,16 +31,28 @@ extension View {
             overlay(shape.stroke(color))
         }
     }
-
-
 }
 
+/// Groups glass surfaces so the system renders them together, as native
+/// Liquid Glass does for neighboring elements.
+struct LumosGlassContainer<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        if #available(macOS 26.0, *) {
+            GlassEffectContainer(spacing: 24) { content }
+        } else {
+            content
+        }
+    }
+}
+
+/// On macOS 26 and later the window itself is an NSGlassEffectView, so the
+/// SwiftUI layer stays clear instead of drawing a second glass pane.
 struct LumosWindowBackground: View {
     var body: some View {
         if #available(macOS 26.0, *) {
-            Rectangle()
-                .fill(.clear)
-                .glassEffect(.regular, in: Rectangle())
+            Color.clear
         } else {
             Color(nsColor: .windowBackgroundColor)
         }

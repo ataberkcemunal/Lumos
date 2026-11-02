@@ -27,12 +27,14 @@ struct ContentView: View {
         ZStack {
             LumosWindowBackground().ignoresSafeArea()
             VStack(spacing: 0) {
-                VStack(spacing: MainLayout.sectionSpacing) {
-                    allLightsCard
-                    HStack(alignment: .top, spacing: MainLayout.cardSpacing) {
-                        ForEach(store.devices) {
-                            MinimalLightCard(device: $0)
-                                .frame(width: MainLayout.cardWidth)
+                LumosGlassContainer {
+                    VStack(spacing: MainLayout.sectionSpacing) {
+                        allLightsCard
+                        HStack(alignment: .top, spacing: MainLayout.cardSpacing) {
+                            ForEach(store.devices) {
+                                MinimalLightCard(device: $0)
+                                    .frame(width: MainLayout.cardWidth)
+                            }
                         }
                     }
                 }
@@ -46,7 +48,8 @@ struct ContentView: View {
                 Color.clear.frame(width: 76)
                 WindowDragRegion()
             }
-            .frame(height: 48)
+            // Title bar strip only; any taller and it swallows clicks on the header toggle.
+            .frame(height: 28)
             .ignoresSafeArea(edges: .top)
         }
         .overlay(alignment: .bottom) { if let toast = store.toast { ToastView(text: toast).padding(.bottom, 22) } }
@@ -149,12 +152,10 @@ private struct WindowDragRegion: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView { DraggableNSView() }
     func updateNSView(_ nsView: NSView, context: Context) {}
 
+    /// Lets the system move the window. A manual performDrag here would run
+    /// alongside the window's own background dragging.
     private final class DraggableNSView: NSView {
         override var mouseDownCanMoveWindow: Bool { true }
-
-        override func mouseDown(with event: NSEvent) {
-            window?.performDrag(with: event)
-        }
     }
 }
 
@@ -178,6 +179,7 @@ struct MixedPowerToggle: View {
             .frame(width: compact ? 44 : 52, height: compact ? 24 : 28)
         }
         .buttonStyle(.plain)
+        .hoverOutline(Capsule())
         .keyboardActivatable(Capsule(), action: action)
         .help(state == .on ? "Kapat" : "Aç")
     }
@@ -401,6 +403,7 @@ private struct MinimalLightCard: View {
                                 )
                                 .contentShape(Circle())
                                 .onTapGesture { applyFavoriteTemperature(value) }
+                                .hoverGrow()
                                 .keyboardActivatable(Circle()) { applyFavoriteTemperature(value) }
                                 .help("\(value) K")
                                 .contextMenu { Button("Favoriden çıkar", role: .destructive) { store.removeFavoriteTemperature(value) } }
@@ -432,10 +435,8 @@ private struct MinimalLightCard: View {
             }
             .onChange(of: temperature) { _, value in kelvinInput = String(Int(value)) }
             .onChange(of: device.color) { _, value in color = value }
-            .lumosIsolatedGlassSurface(
-                tint: device.isReachable && device.isOn
-                    ? indicatorColor.opacity(0.12)
-                    : Color.secondary.opacity(0.025),
+            .lumosGlassSurface(
+                tint: device.isReachable && device.isOn ? indicatorColor.opacity(0.12) : nil,
                 in: RoundedRectangle(cornerRadius: 20)
             )
             .lumosLegacyBorder(
@@ -549,6 +550,42 @@ private final class KeyboardFocusTracker {
     }
 }
 
+extension View {
+    /// Pointer feedback for small click targets such as favorite swatches.
+    func hoverGrow(_ scale: CGFloat = 1.15) -> some View {
+        modifier(HoverGrow(scale: scale))
+    }
+
+    /// Pointer feedback for toggles: a faint outline in the control's shape.
+    func hoverOutline<S: Shape>(_ shape: S) -> some View {
+        modifier(HoverOutline(shape: shape))
+    }
+}
+
+private struct HoverGrow: ViewModifier {
+    let scale: CGFloat
+    @State private var isHovered = false
+
+    func body(content: Content) -> some View {
+        content
+            .scaleEffect(isHovered ? scale : 1)
+            .animation(.easeOut(duration: 0.12), value: isHovered)
+            .onHover { isHovered = $0 }
+    }
+}
+
+private struct HoverOutline<S: Shape>: ViewModifier {
+    let shape: S
+    @State private var isHovered = false
+
+    func body(content: Content) -> some View {
+        content
+            .overlay(shape.stroke(Color.primary.opacity(isHovered ? 0.35 : 0), lineWidth: 1).allowsHitTesting(false))
+            .animation(.easeOut(duration: 0.12), value: isHovered)
+            .onHover { isHovered = $0 }
+    }
+}
+
 private struct KeyboardFocusRing<S: Shape>: ViewModifier {
     let shape: S
     let isFocused: Bool
@@ -624,6 +661,7 @@ private struct KeyboardAdjustable: ViewModifier {
 struct BrightnessSlider: View {
     @Binding var value: Double
     @State private var isDragging = false
+    @State private var isHovered = false
     let activeColor: Color
     let commit: () -> Void
     let liveChange: (Double) -> Void
@@ -651,9 +689,12 @@ struct BrightnessSlider: View {
                     .frame(width: thumbSize, height: thumbSize)
                     .overlay(Circle().stroke(Color.primary.opacity(0.18), lineWidth: 0.6))
                     .shadow(color: .black.opacity(0.25), radius: 1, y: 1)
+                    .scaleEffect(isHovered || isDragging ? 1.12 : 1)
+                    .animation(.easeOut(duration: 0.12), value: isHovered || isDragging)
                     .position(x: thumbX, y: geometry.size.height / 2)
             }
             .contentShape(Rectangle())
+            .onHover { isHovered = $0 }
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { gesture in
@@ -721,8 +762,8 @@ private struct KelvinSlider: View {
                         let raw = min(1, max(0, (gesture.location.x - thumbSize / 2) / trackWidth))
                         var candidate = minimum + raw * (maximum - minimum)
                         candidate = (candidate / 25).rounded() * 25
-                        // A narrow detent: favorites are easy to hit without making nearby values unreachable.
-                        if let favorite = nearestFavorite(to: candidate), abs(candidate - favorite) <= 30 {
+                        // A firm detent that still leaves values 125 K from a favorite reachable.
+                        if let favorite = nearestFavorite(to: candidate), abs(candidate - favorite) <= 100 {
                             candidate = favorite
                         }
                         value = candidate
@@ -757,6 +798,7 @@ private struct InlineColorControl: View {
     @State private var hue: Double
     @State private var saturation: Double
     @State private var hex: String
+    @State private var externallySetHue: Double?
 
     init(color: Binding<Color>, commit: @escaping (Color) -> Void, live: @escaping (Color) -> Void) {
         _color = color
@@ -807,6 +849,7 @@ private struct InlineColorControl: View {
                         )
                         .contentShape(Circle())
                         .onTapGesture { apply(hex: value, shouldCommit: true) }
+                        .hoverGrow()
                         .keyboardActivatable(Circle()) { apply(hex: value, shouldCommit: true) }
                         .help("#\(value)")
                         .contextMenu { Button("Favoriden çıkar", role: .destructive) { store.removeFavoriteColor(value) } }
@@ -822,7 +865,25 @@ private struct InlineColorControl: View {
                     .overlay(RoundedRectangle(cornerRadius: 5).stroke(Color.primary.opacity(0.12), lineWidth: 1))
             }
         }
+        // A color applied elsewhere (menu bar, refresh) moves the slider and HEX
+        // field without echoing a command back to the lamp.
+        .onChange(of: color) { _, value in
+            guard Self.hexString(value) != hex else { return }
+            let source = NSColor(value).usingColorSpace(.deviceRGB) ?? .white
+            var h: CGFloat = 0, s: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+            source.getHue(&h, saturation: &s, brightness: &b, alpha: &a)
+            hex = Self.hexString(value)
+            saturation = Double(s)
+            if hue != Double(h) {
+                externallySetHue = Double(h)
+                hue = Double(h)
+            }
+        }
         .onChange(of: hue) { _, value in
+            if value == externallySetHue {
+                externallySetHue = nil
+                return
+            }
             saturation = 1
             if let snapped = snappedHue(value), circularDistance(value, snapped) > 0.0005 {
                 hue = snapped
