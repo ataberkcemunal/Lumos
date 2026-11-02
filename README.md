@@ -39,6 +39,8 @@ open /Applications/Lumos.app
 
 The script creates a release build, installs it at `/Applications/Lumos.app`, and applies an ad hoc signature for local use.
 
+The app icon is drawn in code by `scripts/make-icon.swift`. Run `sh scripts/build-icon.sh` after changing it to regenerate `icon.png`, the iconset and `Resources/Lumos.icns`.
+
 On first launch, allow macOS local-network access. The downloadable GitHub build is not notarized, so macOS may display a security warning the first time it is opened.
 
 ## Privacy

@@ -333,8 +333,10 @@ final class MainWindowPresenter: NSObject, NSWindowDelegate {
             created.delegate = self
             window = created
         }
-        NSApp.activate()
+        NSApp.bringLumosForward()
         window?.makeKeyAndOrderFront(nil)
+        // Also raise it if activation lands a moment late after the policy switch.
+        window?.orderFrontRegardless()
         DispatchQueue.main.async { [weak window] in
             window?.makeFirstResponder(nil)
         }

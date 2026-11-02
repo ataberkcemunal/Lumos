@@ -1,6 +1,15 @@
 import AppKit
 import SwiftUI
 
+extension NSApplication {
+    /// Brings Lumos to the front. The cooperative `activate()` is refused while
+    /// another app is frontmost, which is always the case after a menu bar click,
+    /// so the panel and window would open behind it without keyboard focus.
+    func bringLumosForward() {
+        activate(ignoringOtherApps: true)
+    }
+}
+
 /// Owns exactly one status item for the application's lifetime. Display changes
 /// dismiss its presentation, never remove/reinsert or resize the status item.
 @MainActor
@@ -75,7 +84,7 @@ final class MenuBarPanelController: NSObject, NSPopoverDelegate {
         button.highlight(popover.isShown)
         // An accessory app is not active by itself; without activation, Tab and
         // arrow keys would go to the previously frontmost app.
-        NSApp.activate()
+        NSApp.bringLumosForward()
         if let window = popover.contentViewController?.view.window {
             window.makeKey()
             // Start without a focused control so a stray Space cannot switch lamps;
