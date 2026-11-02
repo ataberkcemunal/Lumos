@@ -525,6 +525,27 @@ extension View {
     }
 }
 
+/// Tracks whether the user is navigating with the keyboard, so focus rings
+/// appear for Tab and arrow keys but not after a mouse click.
+@MainActor @Observable
+private final class KeyboardFocusTracker {
+    static let shared = KeyboardFocusTracker()
+    private(set) var isKeyboardNavigating = false
+    @ObservationIgnored private var monitor: Any?
+
+    private init() {
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .rightMouseDown]) { event in
+            MainActor.assumeIsolated {
+                let navigating = event.type == .keyDown
+                if KeyboardFocusTracker.shared.isKeyboardNavigating != navigating {
+                    KeyboardFocusTracker.shared.isKeyboardNavigating = navigating
+                }
+            }
+            return event
+        }
+    }
+}
+
 private struct KeyboardFocusRing<S: Shape>: ViewModifier {
     let shape: S
     let isFocused: Bool
@@ -533,9 +554,9 @@ private struct KeyboardFocusRing<S: Shape>: ViewModifier {
         content
             .focusEffectDisabled()
             .overlay(
-                shape.stroke(Color.accentColor, lineWidth: 2)
+                shape.stroke(Color.primary.opacity(0.55), lineWidth: 1.5)
                     .padding(-3)
-                    .opacity(isFocused ? 1 : 0)
+                    .opacity(isFocused && KeyboardFocusTracker.shared.isKeyboardNavigating ? 1 : 0)
                     .allowsHitTesting(false)
             )
     }
