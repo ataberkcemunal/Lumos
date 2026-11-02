@@ -63,10 +63,7 @@ struct MenuBarView: View {
 
             Divider().opacity(0.55)
             HStack(spacing: MenuLayout.columnSpacing) {
-                Button {
-                    dismiss()
-                    DispatchQueue.main.async { MainWindowPresenter.shared.show(store: store) }
-                } label: {
+                Button(action: openMainWindow) {
                     Text("Lumos’u aç")
                         .frame(maxWidth: .infinity)
                         .frame(height: MenuLayout.footerButtonHeight)
@@ -77,6 +74,7 @@ struct MenuBarView: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .keyboardActivatable(RoundedRectangle(cornerRadius: MenuLayout.footerCornerRadius), action: openMainWindow)
                 .onHover { isOpenHovered = $0 }
                 RefreshButton(width: 34, height: MenuLayout.footerButtonHeight)
                     .background(
@@ -93,6 +91,7 @@ struct MenuBarView: View {
                         )
                 }
                 .buttonStyle(.plain)
+                .keyboardActivatable(RoundedRectangle(cornerRadius: MenuLayout.footerCornerRadius)) { NSApp.terminate(nil) }
                 .foregroundStyle(.primary)
                 .onHover { isQuitHovered = $0 }
                 .help("Lumos’tan Çık")
@@ -105,6 +104,11 @@ struct MenuBarView: View {
         .frame(width: MenuLayout.width)
         .fontDesign(.default)
         .environment(\.controlActiveState, .key)
+    }
+
+    private func openMainWindow() {
+        dismiss()
+        DispatchQueue.main.async { MainWindowPresenter.shared.show(store: store) }
     }
 
     private var allPowerState: MixedPowerState {
@@ -191,7 +195,7 @@ private struct MenuBarLightRow: View {
                             .foregroundStyle(.secondary)
                             .frame(width: MenuLayout.iconColumnWidth, height: 18)
                         ForEach(store.favoriteTemperatures.prefix(5), id: \.self) { kelvin in
-                            Button { Task { await store.setTemperature(kelvin, id: device.id) } } label: {
+                            Button { applyTemperature(kelvin) } label: {
                                 Circle().fill(whiteColor(for: kelvin)).frame(width: 16, height: 16)
                                     .overlay(
                                         Circle()
@@ -199,12 +203,12 @@ private struct MenuBarLightRow: View {
                                             .frame(width: isSelected(kelvin: kelvin) ? 19 : 16, height: isSelected(kelvin: kelvin) ? 19 : 16)
                                     )
                             }
-                            .buttonStyle(.plain).help("\(kelvin) K")
+                            .buttonStyle(.plain)
+                            .keyboardActivatable(Circle()) { applyTemperature(kelvin) }
+                            .help("\(kelvin) K")
                         }
                         ForEach(store.favoriteColors.prefix(5), id: \.self) { hex in
-                            Button {
-                                if let value = color(from: hex) { Task { await store.setColor(value, id: device.id) } }
-                            } label: {
+                            Button { applyColor(hex) } label: {
                                 Circle().fill(color(from: hex) ?? .white).frame(width: 16, height: 16)
                                     .overlay(
                                         Circle()
@@ -212,7 +216,9 @@ private struct MenuBarLightRow: View {
                                             .frame(width: isSelected(hex: hex) ? 19 : 16, height: isSelected(hex: hex) ? 19 : 16)
                                     )
                             }
-                            .buttonStyle(.plain).help("#\(hex.uppercased())")
+                            .buttonStyle(.plain)
+                            .keyboardActivatable(Circle()) { applyColor(hex) }
+                            .help("#\(hex.uppercased())")
                         }
                         Spacer(minLength: 0)
                     }
@@ -244,6 +250,15 @@ private struct MenuBarLightRow: View {
 
     private func whiteColor(for kelvin: Int) -> Color {
         whiteTemperatureColor(kelvin)
+    }
+
+    private func applyTemperature(_ kelvin: Int) {
+        Task { await store.setTemperature(kelvin, id: device.id) }
+    }
+
+    private func applyColor(_ hex: String) {
+        guard let value = color(from: hex) else { return }
+        Task { await store.setColor(value, id: device.id) }
     }
 
     private func color(from hex: String) -> Color? {

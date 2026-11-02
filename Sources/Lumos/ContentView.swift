@@ -176,7 +176,10 @@ struct MixedPowerToggle: View {
             }
             .frame(width: compact ? 44 : 52, height: compact ? 24 : 28)
             .opacity(controlActiveState == .inactive ? 0.90 : 1)
-        }.buttonStyle(.plain).help(state == .on ? "Kapat" : "Aç")
+        }
+        .buttonStyle(.plain)
+        .keyboardActivatable(Capsule(), action: action)
+        .help(state == .on ? "Kapat" : "Aç")
     }
 }
 
@@ -218,7 +221,7 @@ struct RefreshButton: View {
     var height: CGFloat = 28
 
     var body: some View {
-        Button { Task { await store.refreshAll(retry: true) } } label: {
+        Button(action: refresh) {
             ZStack {
                 if store.isRefreshing {
                     ProgressView().controlSize(.small)
@@ -230,9 +233,16 @@ struct RefreshButton: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .keyboardActivatable(RoundedRectangle(cornerRadius: 7), action: refresh)
+        .keyboardShortcut("r")
         .foregroundStyle(.secondary)
         .disabled(store.isRefreshing)
-        .help(store.isRefreshing ? "Lambalar yenileniyor" : "Yenile ve yeniden dene")
+        .help(store.isRefreshing ? "Lambalar yenileniyor" : "Yenile ve yeniden dene (⌘R)")
+    }
+
+    private func refresh() {
+        guard !store.isRefreshing else { return }
+        Task { await store.refreshAll(retry: true) }
     }
 }
 
@@ -369,7 +379,10 @@ private struct MinimalLightCard: View {
                     HStack(spacing: 9) {
                         Button { store.toggleFavoriteTemperature(Int(temperature)) } label: {
                             Image(systemName: store.favoriteTemperatures.contains(Int(temperature)) ? "heart.fill" : "heart").frame(width: 24, height: 24)
-                        }.buttonStyle(.borderless).foregroundStyle(.secondary).help("Favoriye ekle veya çıkar")
+                        }
+                        .buttonStyle(.borderless)
+                        .keyboardActivatable(Circle()) { store.toggleFavoriteTemperature(Int(temperature)) }
+                        .foregroundStyle(.secondary).help("Favoriye ekle veya çıkar")
                         ForEach(store.favoriteTemperatures.prefix(5), id: \.self) { value in
                             Circle().fill(whiteColor(for: value)).frame(width: 25, height: 25)
                                 .overlay(
@@ -383,10 +396,8 @@ private struct MinimalLightCard: View {
                                     )
                                 )
                                 .contentShape(Circle())
-                                .onTapGesture {
-                                temperature = Double(value)
-                                Task { await store.setTemperature(value, id: device.id) }
-                                }
+                                .onTapGesture { applyFavoriteTemperature(value) }
+                                .keyboardActivatable(Circle()) { applyFavoriteTemperature(value) }
                                 .help("\(value) K")
                                 .contextMenu { Button("Favoriden çıkar", role: .destructive) { store.removeFavoriteTemperature(value) } }
                         }
@@ -446,6 +457,11 @@ private struct MinimalLightCard: View {
         whiteTemperatureColor(kelvin)
     }
 
+    private func applyFavoriteTemperature(_ value: Int) {
+        temperature = Double(value)
+        Task { await store.setTemperature(value, id: device.id) }
+    }
+
     private func applyKelvinInput() {
         guard let value = Int(kelvinInput), (2200...6500).contains(value) else {
             kelvinInput = String(Int(temperature))
@@ -486,8 +502,98 @@ private struct NeutralModeToggle: View {
             .opacity(controlActiveState == .inactive ? 0.90 : 1)
         }
         .buttonStyle(.plain)
+        .keyboardActivatable(Capsule()) { isOn.toggle() }
         .accessibilityLabel("Beyaz ve renkli mod")
         .accessibilityValue(isOn ? "Renkli" : "Beyaz")
+    }
+}
+
+extension View {
+    /// Tab focus, a visible ring and Space/Return activation for a custom button,
+    /// independent of the system's keyboard-navigation setting.
+    func keyboardActivatable<S: Shape>(_ shape: S, action: @escaping () -> Void) -> some View {
+        modifier(KeyboardActivatable(shape: shape, action: action))
+    }
+
+    /// Tab focus and arrow-key stepping for a custom slider. Each step previews
+    /// on the lamp; one commit follows once the keys go quiet.
+    fileprivate func keyboardAdjustable(
+        value: Binding<Double>, in range: ClosedRange<Double>, step: Double,
+        live: @escaping (Double) -> Void, commit: @escaping () -> Void
+    ) -> some View {
+        modifier(KeyboardAdjustable(value: value, range: range, step: step, live: live, commit: commit))
+    }
+}
+
+private struct KeyboardFocusRing<S: Shape>: ViewModifier {
+    let shape: S
+    let isFocused: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .focusEffectDisabled()
+            .overlay(
+                shape.stroke(Color.accentColor, lineWidth: 2)
+                    .padding(-3)
+                    .opacity(isFocused ? 1 : 0)
+                    .allowsHitTesting(false)
+            )
+    }
+}
+
+private struct KeyboardActivatable<S: Shape>: ViewModifier {
+    let shape: S
+    let action: () -> Void
+    @FocusState private var isFocused: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .focusable()
+            .focused($isFocused)
+            .modifier(KeyboardFocusRing(shape: shape, isFocused: isFocused))
+            .onKeyPress(keys: [.space, .return]) { _ in
+                action()
+                return .handled
+            }
+    }
+}
+
+private struct KeyboardAdjustable: ViewModifier {
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    let step: Double
+    let live: (Double) -> Void
+    let commit: () -> Void
+    @FocusState private var isFocused: Bool
+    @State private var commitTask: Task<Void, Never>?
+
+    func body(content: Content) -> some View {
+        content
+            .focusable()
+            .focused($isFocused)
+            .modifier(KeyboardFocusRing(shape: Capsule(), isFocused: isFocused))
+            .onKeyPress(keys: [.leftArrow, .rightArrow, .upArrow, .downArrow]) { press in
+                let direction: Double = press.key == .leftArrow || press.key == .downArrow ? -1 : 1
+                let next = min(range.upperBound, max(range.lowerBound, value + direction * step))
+                guard next != value else { return .handled }
+                value = next
+                live(next)
+                commitTask?.cancel()
+                commitTask = Task {
+                    try? await Task.sleep(for: .milliseconds(350))
+                    guard !Task.isCancelled else { return }
+                    commitTask = nil
+                    commit()
+                }
+                return .handled
+            }
+            // Closing the panel mid-adjustment must still deliver the final value.
+            .onDisappear {
+                guard let pending = commitTask else { return }
+                pending.cancel()
+                commitTask = nil
+                commit()
+            }
     }
 }
 
@@ -544,6 +650,7 @@ struct BrightnessSlider: View {
             )
         }
         .frame(height: compact ? 22 : 26)
+        .keyboardAdjustable(value: $value, in: minimum...maximum, step: 5, live: liveChange, commit: commit)
         .opacity(controlActiveState == .inactive ? 0.90 : 1)
         .accessibilityLabel("Parlaklık")
         .accessibilityValue("Yüzde \(Int(value))")
@@ -603,6 +710,7 @@ private struct KelvinSlider: View {
             )
         }
         .frame(height: 26)
+        .keyboardAdjustable(value: $value, in: minimum...maximum, step: 100, live: liveChange, commit: commit)
         .opacity(controlActiveState == .inactive ? 0.90 : 1)
         .accessibilityLabel("Beyaz sıcaklığı")
         .accessibilityValue("\(Int(value)) Kelvin")
@@ -659,7 +767,10 @@ private struct InlineColorControl: View {
             HStack(spacing: 9) {
                 Button { store.toggleFavoriteColor(hex) } label: {
                     Image(systemName: store.favoriteColors.contains(hex.uppercased()) ? "heart.fill" : "heart").frame(width: 24, height: 24)
-                }.buttonStyle(.borderless).foregroundStyle(.secondary).help("Favoriye ekle veya çıkar")
+                }
+                .buttonStyle(.borderless)
+                .keyboardActivatable(Circle()) { store.toggleFavoriteColor(hex) }
+                .foregroundStyle(.secondary).help("Favoriye ekle veya çıkar")
                 ForEach(store.favoriteColors.prefix(5), id: \.self) { value in
                     Circle().fill(Self.color(from: value) ?? .white).frame(width: 25, height: 25)
                         .overlay(
@@ -674,6 +785,7 @@ private struct InlineColorControl: View {
                         )
                         .contentShape(Circle())
                         .onTapGesture { apply(hex: value, shouldCommit: true) }
+                        .keyboardActivatable(Circle()) { apply(hex: value, shouldCommit: true) }
                         .help("#\(value)")
                         .contextMenu { Button("Favoriden çıkar", role: .destructive) { store.removeFavoriteColor(value) } }
                 }
@@ -784,7 +896,7 @@ private struct ValidatedTextField: NSViewRepresentable {
         let field = NSTextField(string: text)
         field.isBordered = false
         field.drawsBackground = false
-        field.focusRingType = .none
+        field.focusRingType = .default
         field.font = .monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
         field.textColor = .labelColor
         field.delegate = context.coordinator
@@ -910,6 +1022,9 @@ private struct ColorComponentSlider: View {
             )
         }
         .frame(height: MainLayout.controlHeight)
+        // 10° steps stay outside the 0.018 favorite detent, so a step can leave a snapped hue.
+        // The parent previews hue changes itself.
+        .keyboardAdjustable(value: $value, in: 0...1, step: 1.0 / 36, live: { _ in }, commit: commit)
     }
 }
 
