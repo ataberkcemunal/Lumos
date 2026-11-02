@@ -5,17 +5,54 @@ import Darwin
 actor WizClient {
     static let shared = WizClient()
     private let port: NWEndpoint.Port = 38899
+    private let discover: @Sendable () -> [LocatedLight]
+    private let initialBackoff: TimeInterval
+    private let maximumBackoff: TimeInterval
+    private var discoveryTask: Task<[LocatedLight], Never>?
+    private var discoveryBackoff: [String: (retryAt: TimeInterval, delay: TimeInterval)] = [:]
 
-    /// Only a matching hardware identity may replace a saved address.
-    func resolve(ip: String, mac: String?) async -> LocatedLight? {
+    init(
+        discover: @escaping @Sendable () -> [LocatedLight] = discoverWizLights,
+        initialBackoff: TimeInterval = 15,
+        maximumBackoff: TimeInterval = 300
+    ) {
+        self.discover = discover
+        self.initialBackoff = initialBackoff
+        self.maximumBackoff = maximumBackoff
+    }
+
+    /// Only a matching hardware identity may replace a saved address. Discovery
+    /// scans the subnet, so it is opt-in, shared by concurrent callers, and
+    /// backs off per lamp while that lamp stays missing.
+    func resolve(ip: String, mac: String?, allowDiscovery: Bool = true) async -> LocatedLight? {
         if let state = try? await command(ip: ip, method: "getPilot", expectsReply: true),
            state.state != nil, let identity = normalizedMAC(state.mac),
            mac == nil || normalizedMAC(mac) == identity {
+            discoveryBackoff[identity] = nil
             return LocatedLight(ip: ip, state: state)
         }
-        guard let identity = normalizedMAC(mac) else { return nil }
-        let lights = await Task.detached { discoverWizLights() }.value
-        return lights.first { normalizedMAC($0.state.mac) == identity }
+        guard allowDiscovery, let identity = normalizedMAC(mac) else { return nil }
+        if let backoff = discoveryBackoff[identity], ProcessInfo.processInfo.systemUptime < backoff.retryAt {
+            return nil
+        }
+        let lights = await sharedDiscovery()
+        if let match = lights.first(where: { normalizedMAC($0.state.mac) == identity }) {
+            discoveryBackoff[identity] = nil
+            return match
+        }
+        let delay = discoveryBackoff[identity].map { min(maximumBackoff, $0.delay * 2) } ?? initialBackoff
+        discoveryBackoff[identity] = (ProcessInfo.processInfo.systemUptime + delay, delay)
+        return nil
+    }
+
+    private func sharedDiscovery() async -> [LocatedLight] {
+        if let discoveryTask { return await discoveryTask.value }
+        let discover = self.discover
+        let task = Task.detached { discover() }
+        discoveryTask = task
+        let lights = await task.value
+        discoveryTask = nil
+        return lights
     }
 
     func command(ip: String, method: String, params: [String: JSONValue] = [:], expectsReply: Bool = false) async throws -> PilotState? {

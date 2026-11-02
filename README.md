@@ -52,6 +52,12 @@ The two configured home lamps have their verified MAC identities seeded for migr
 
 Run `sh scripts/test-discovery.sh` on this home network for read-only integration checks covering stale addresses, addresses occupied by another lamp, unknown identities, and identity learning. The test does not switch lights or alter their settings.
 
+Writes reuse an identity confirmed within the last minute, so each command is a
+single packet. Commands to a lamp are sent one at a time in order, and slider
+previews never trigger a subnet scan. A missing lamp is rescanned with backoff
+(15 s doubling to 5 min). Run `sh scripts/test-command-path.sh` for offline checks
+against a fake lamp on `127.0.0.1`.
+
 ### Menu bar lifecycle
 
 Lumos keeps one fixed-width status item and presents controls in an AppKit

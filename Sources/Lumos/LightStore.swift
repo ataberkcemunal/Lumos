@@ -33,8 +33,15 @@ final class LightStore {
     private var lastTemperaturePreview: [UUID: TimeInterval] = [:]
     private var lastColorPreview: [UUID: TimeInterval] = [:]
     private var consecutiveRefreshFailures: [UUID: Int] = [:]
+    private let client: WizClient
+    /// Uptime of each lamp's last confirmed MAC identity at its saved address.
+    private var verifiedAt: [UUID: TimeInterval] = [:]
+    private var commandTails: [UUID: Task<Bool, Never>] = [:]
+    private var commandTickets: [UUID: Int] = [:]
+    private static let identityLifetime: TimeInterval = 60
 
-    init() {
+    init(client: WizClient = .shared) {
+        self.client = client
         let saved = UserDefaults.standard.data(forKey: "lumos.devices")
             .flatMap { try? JSONDecoder().decode([LightDevice].self, from: $0) } ?? []
         let desk = saved.first { $0.name == "Çalışma Masası Lambası" }
@@ -149,7 +156,7 @@ final class LightStore {
         let wasOff = devices.first(where: { $0.id == id })?.isOn == false
         update(id) { $0.isOn = true; $0.brightness = value; $0.sceneID = nil }
         if wasOff { playPowerSound(isOn: true) }
-        await send(id: id, params: ["state": .bool(true), "dimming": .int(value)])
+        await send(id: id, params: ["state": .bool(true), "dimming": .int(value)], isPreview: true)
     }
 
     func setTemperature(_ value: Int, id: UUID) async {
@@ -164,7 +171,7 @@ final class LightStore {
         let wasOff = devices.first(where: { $0.id == id })?.isOn == false
         update(id) { $0.isOn = true; $0.temperature = value; $0.sceneID = nil; $0.isColorMode = false }
         if wasOff { playPowerSound(isOn: true) }
-        await send(id: id, params: ["state": .bool(true), "temp": .int(value)])
+        await send(id: id, params: ["state": .bool(true), "temp": .int(value)], isPreview: true)
     }
 
     func setColor(_ color: Color, id: UUID) async {
@@ -195,7 +202,7 @@ final class LightStore {
         let wasOff = devices.first(where: { $0.id == id })?.isOn == false
         update(id) { $0.isOn = true; $0.red = r; $0.green = g; $0.blue = b; $0.sceneID = nil; $0.isColorMode = true }
         if wasOff { playPowerSound(isOn: true) }
-        await send(id: id, params: ["state": .bool(true), "r": .int(r), "g": .int(g), "b": .int(b)])
+        await send(id: id, params: ["state": .bool(true), "r": .int(r), "g": .int(g), "b": .int(b)], isPreview: true)
     }
 
     func applyScene(_ scene: LightScene) async {
@@ -216,10 +223,11 @@ final class LightStore {
         isRefreshing = true
         defer { isRefreshing = false; persist() }
         let targets = devices.map { RefreshTarget(id: $0.id, ip: $0.ip, mac: $0.mac, wasReachable: $0.isReachable) }
+        let client = self.client
         let results = await withTaskGroup(of: RefreshResult.self, returning: [RefreshResult].self) { group in
             for target in targets {
                 group.addTask {
-                    let located = await WizClient.shared.resolve(ip: target.ip, mac: target.mac)
+                    let located = await client.resolve(ip: target.ip, mac: target.mac)
                     return RefreshResult(target: target, state: located?.state, resolvedIP: located?.ip)
                 }
             }
@@ -237,6 +245,7 @@ final class LightStore {
             if let result = response.state {
                 if let ip = response.resolvedIP { refreshedDevices[index].ip = ip }
                 refreshedDevices[index].mac = normalizedMAC(result.mac)
+                verifiedAt[response.target.id] = ProcessInfo.processInfo.systemUptime
                 consecutiveRefreshFailures[response.target.id] = 0
                 refreshedDevices[index].isReachable = true
                 refreshedDevices[index].isOn = result.state ?? refreshedDevices[index].isOn
@@ -267,28 +276,57 @@ final class LightStore {
         }
     }
 
+    /// Sends one command per lamp at a time, in request order. A queued preview
+    /// is dropped once a newer command for the same lamp has been requested.
     @discardableResult
     private func send(
         id: UUID,
         params: [String: JSONValue],
-        waitForAcknowledgement: Bool = false
+        waitForAcknowledgement: Bool = false,
+        isPreview: Bool = false
+    ) async -> Bool {
+        let ticket = (commandTickets[id] ?? 0) + 1
+        commandTickets[id] = ticket
+        let previous = commandTails[id]
+        let command = Task { @MainActor [weak self] () -> Bool in
+            _ = await previous?.value
+            guard let self, !isPreview || self.commandTickets[id] == ticket else { return false }
+            return await self.deliver(id: id, params: params, waitForAcknowledgement: waitForAcknowledgement, isPreview: isPreview)
+        }
+        commandTails[id] = command
+        return await command.value
+    }
+
+    private func deliver(
+        id: UUID,
+        params: [String: JSONValue],
+        waitForAcknowledgement: Bool,
+        isPreview: Bool
     ) async -> Bool {
         guard var device = devices.first(where: { $0.id == id }) else { return false }
-        // Verify identity before any write: DHCP can assign the old IP to another lamp.
-        guard let located = await WizClient.shared.resolve(ip: device.ip, mac: device.mac) else {
-            update(id) { $0.isReachable = false }
-            showFeedback(id: id, message: "Bağlantı yok", isError: true, autoHide: false)
-            return false
+        // Verify identity before writing: DHCP can assign the old IP to another
+        // lamp. A recent confirmation is reused so each write costs one packet,
+        // and previews never wait for a subnet scan.
+        let lastVerified = verifiedAt[id] ?? -.infinity
+        if ProcessInfo.processInfo.systemUptime - lastVerified > Self.identityLifetime {
+            guard let located = await client.resolve(ip: device.ip, mac: device.mac, allowDiscovery: !isPreview) else {
+                if !isPreview {
+                    update(id) { $0.isReachable = false }
+                    showFeedback(id: id, message: "Bağlantı yok", isError: true, autoHide: false)
+                }
+                return false
+            }
+            device.ip = located.ip
+            verifiedAt[id] = ProcessInfo.processInfo.systemUptime
+            update(id) { $0.ip = located.ip; $0.mac = normalizedMAC(located.state.mac) }
+            persist()
         }
-        device.ip = located.ip
-        update(id) { $0.ip = located.ip; $0.mac = normalizedMAC(located.state.mac) }
-        persist()
         let attemptCount = waitForAcknowledgement ? 2 : 1
 
         for attempt in 0..<attemptCount {
             do {
                 let wasReachable = device.isReachable
-                _ = try await WizClient.shared.command(
+                _ = try await client.command(
                     ip: device.ip,
                     method: "setPilot",
                     params: params,
@@ -308,7 +346,9 @@ final class LightStore {
         }
 
         // A single missed UDP acknowledgement should not label an otherwise
-        // healthy lamp offline. Periodic getPilot refreshes own reachability.
+        // healthy lamp offline. Periodic getPilot refreshes own reachability;
+        // the next write re-verifies identity in case the address moved.
+        verifiedAt[id] = nil
         showFeedback(id: id, message: "Komut gönderilemedi", isError: true)
         toast = "\(device.name) komuta yanıt vermedi"
         return false
