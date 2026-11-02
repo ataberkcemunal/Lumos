@@ -36,6 +36,9 @@ final class LightStore {
     private var verifiedAt: [UUID: TimeInterval] = [:]
     private var commandTails: [UUID: Task<Bool, Never>] = [:]
     private var commandTickets: [UUID: Int] = [:]
+    /// Lamps switched on implicitly by a slider or swatch; the sound plays
+    /// once a command to the lamp actually succeeds.
+    private var powerOnSoundPending: Set<UUID> = []
     private static let identityLifetime: TimeInterval = 60
 
     init(client: WizClient = .shared) {
@@ -114,6 +117,8 @@ final class LightStore {
 
     func setPower(_ on: Bool, ids: [UUID]? = nil) async {
         let targets = ids ?? devices.map(\.id)
+        // An explicit power command plays its own sound below.
+        powerOnSoundPending.subtract(targets)
         let previousStates = Dictionary(uniqueKeysWithValues: devices
             .filter { targets.contains($0.id) }
             .map { ($0.id, $0) })
@@ -153,7 +158,7 @@ final class LightStore {
     func setBrightness(_ value: Int, id: UUID) async {
         let wasOff = devices.first(where: { $0.id == id })?.isOn == false
         update(id) { $0.isOn = true; $0.brightness = value; $0.sceneID = nil }
-        if wasOff { playPowerSound(isOn: true) }
+        if wasOff { powerOnSoundPending.insert(id) }
         await send(id: id, params: ["state": .bool(true), "dimming": .int(value)]); persist()
     }
 
@@ -161,14 +166,14 @@ final class LightStore {
         guard shouldPreview(id: id, timestamps: &lastBrightnessPreview) else { return }
         let wasOff = devices.first(where: { $0.id == id })?.isOn == false
         update(id) { $0.isOn = true; $0.brightness = value; $0.sceneID = nil }
-        if wasOff { playPowerSound(isOn: true) }
+        if wasOff { powerOnSoundPending.insert(id) }
         await send(id: id, params: ["state": .bool(true), "dimming": .int(value)], isPreview: true)
     }
 
     func setTemperature(_ value: Int, id: UUID) async {
         let wasOff = devices.first(where: { $0.id == id })?.isOn == false
         update(id) { $0.isOn = true; $0.temperature = value; $0.sceneID = nil; $0.isColorMode = false }
-        if wasOff { playPowerSound(isOn: true) }
+        if wasOff { powerOnSoundPending.insert(id) }
         await send(id: id, params: ["state": .bool(true), "temp": .int(value)]); persist()
     }
 
@@ -176,7 +181,7 @@ final class LightStore {
         guard shouldPreview(id: id, timestamps: &lastTemperaturePreview) else { return }
         let wasOff = devices.first(where: { $0.id == id })?.isOn == false
         update(id) { $0.isOn = true; $0.temperature = value; $0.sceneID = nil; $0.isColorMode = false }
-        if wasOff { playPowerSound(isOn: true) }
+        if wasOff { powerOnSoundPending.insert(id) }
         await send(id: id, params: ["state": .bool(true), "temp": .int(value)], isPreview: true)
     }
 
@@ -187,7 +192,7 @@ final class LightStore {
         let b = Int((srgb.blueComponent * 255).rounded())
         let wasOff = devices.first(where: { $0.id == id })?.isOn == false
         update(id) { $0.isOn = true; $0.red = r; $0.green = g; $0.blue = b; $0.sceneID = nil; $0.isColorMode = true }
-        if wasOff { playPowerSound(isOn: true) }
+        if wasOff { powerOnSoundPending.insert(id) }
         await send(id: id, params: ["state": .bool(true), "r": .int(r), "g": .int(g), "b": .int(b)]); persist()
     }
 
@@ -198,7 +203,7 @@ final class LightStore {
         let b = Int((srgb.blueComponent * 255).rounded())
         let wasOff = devices.first(where: { $0.id == id })?.isOn == false
         update(id) { $0.isOn = true; $0.red = r; $0.green = g; $0.blue = b; $0.sceneID = nil; $0.isColorMode = true }
-        if wasOff { playPowerSound(isOn: true) }
+        if wasOff { powerOnSoundPending.insert(id) }
     }
 
     func previewColor(_ color: Color, id: UUID) async {
@@ -207,7 +212,7 @@ final class LightStore {
         let r = Int((srgb.redComponent * 255).rounded()), g = Int((srgb.greenComponent * 255).rounded()), b = Int((srgb.blueComponent * 255).rounded())
         let wasOff = devices.first(where: { $0.id == id })?.isOn == false
         update(id) { $0.isOn = true; $0.red = r; $0.green = g; $0.blue = b; $0.sceneID = nil; $0.isColorMode = true }
-        if wasOff { playPowerSound(isOn: true) }
+        if wasOff { powerOnSoundPending.insert(id) }
         await send(id: id, params: ["state": .bool(true), "r": .int(r), "g": .int(g), "b": .int(b)], isPreview: true)
     }
 
@@ -334,6 +339,7 @@ final class LightStore {
                 if !wasReachable || connectionFeedback[id]?.isError == true {
                     showFeedback(id: id, message: "Yeniden bağlandı", isError: false, autoHide: true)
                 }
+                if powerOnSoundPending.remove(id) != nil { playPowerSound(isOn: true) }
                 return true
             } catch {
                 if attempt + 1 < attemptCount {

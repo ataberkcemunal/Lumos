@@ -332,9 +332,13 @@ private struct MinimalLightCard: View {
                     Spacer()
                     Text("Beyaz").font(.subheadline.weight(device.isColorMode == true ? .regular : .semibold))
                         .foregroundStyle(device.isColorMode == true ? Color.secondary : Color.primary)
+                        .contentShape(Rectangle())
+                        .onTapGesture { if device.isColorMode == true { colorModeToggle.wrappedValue = false } }
                     NeutralModeToggle(isOn: colorModeToggle)
                     Text("Renkli").font(.subheadline.weight(device.isColorMode == true ? .semibold : .regular))
                         .foregroundStyle(device.isColorMode == true ? Color.primary : Color.secondary)
+                        .contentShape(Rectangle())
+                        .onTapGesture { if device.isColorMode != true { colorModeToggle.wrappedValue = true } }
                     Spacer()
                 }
 
@@ -717,7 +721,8 @@ private struct KelvinSlider: View {
                         let raw = min(1, max(0, (gesture.location.x - thumbSize / 2) / trackWidth))
                         var candidate = minimum + raw * (maximum - minimum)
                         candidate = (candidate / 25).rounded() * 25
-                        if let favorite = nearestFavorite(to: candidate), abs(candidate - favorite) <= 125 {
+                        // A narrow detent: favorites are easy to hit without making nearby values unreachable.
+                        if let favorite = nearestFavorite(to: candidate), abs(candidate - favorite) <= 30 {
                             candidate = favorite
                         }
                         value = candidate

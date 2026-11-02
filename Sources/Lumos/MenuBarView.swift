@@ -207,6 +207,10 @@ private struct MenuBarLightRow: View {
                             .keyboardActivatable(Circle()) { applyTemperature(kelvin) }
                             .help("\(kelvin) K")
                         }
+                        // Warm whites and oranges look alike; keep the two kinds visibly apart.
+                        if !store.favoriteTemperatures.isEmpty && !store.favoriteColors.isEmpty {
+                            Divider().frame(height: 14)
+                        }
                         ForEach(store.favoriteColors.prefix(LightStore.maximumFavoritesPerKind), id: \.self) { hex in
                             Button { applyColor(hex) } label: {
                                 Circle().fill(color(from: hex) ?? .white).frame(width: 16, height: 16)
