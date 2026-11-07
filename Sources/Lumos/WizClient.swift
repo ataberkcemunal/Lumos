@@ -164,6 +164,50 @@ func normalizedMAC(_ value: String?) -> String? {
     return compact
 }
 
+/// An IPv4 network the Mac is attached to, as host-order address and mask.
+struct LocalNetwork: Equatable, Sendable {
+    let address: UInt32
+    let mask: UInt32
+
+    func contains(_ ip: String) -> Bool {
+        guard let value = ipv4Value(ip) else { return false }
+        return value & mask == address & mask
+    }
+}
+
+func ipv4Value(_ ip: String) -> UInt32? {
+    let parts = ip.split(separator: ".")
+    guard parts.count == 4 else { return nil }
+    var value: UInt32 = 0
+    for part in parts {
+        guard let octet = UInt32(part), octet <= 255 else { return nil }
+        value = value << 8 | octet
+    }
+    return value
+}
+
+/// Active, non-loopback IPv4 networks. Used to tell "this lamp is off" apart
+/// from "the Mac is on a different network than its lamps".
+func localIPv4Networks() -> [LocalNetwork] {
+    var networks: [LocalNetwork] = []
+    var interfaces: UnsafeMutablePointer<ifaddrs>?
+    guard getifaddrs(&interfaces) == 0 else { return [] }
+    defer { freeifaddrs(interfaces) }
+    var current = interfaces
+    while let entry = current {
+        defer { current = entry.pointee.ifa_next }
+        let flags = entry.pointee.ifa_flags
+        guard flags & UInt32(IFF_UP) != 0, flags & UInt32(IFF_RUNNING) != 0, flags & UInt32(IFF_LOOPBACK) == 0,
+              let address = entry.pointee.ifa_addr, address.pointee.sa_family == UInt8(AF_INET),
+              let netmask = entry.pointee.ifa_netmask else { continue }
+        networks.append(LocalNetwork(
+            address: UnsafeRawPointer(address).assumingMemoryBound(to: sockaddr_in.self).pointee.sin_addr.s_addr.bigEndian,
+            mask: UnsafeRawPointer(netmask).assumingMemoryBound(to: sockaddr_in.self).pointee.sin_addr.s_addr.bigEndian
+        ))
+    }
+    return networks
+}
+
 /// Runs off the main actor; all sockets close after a bounded discovery window.
 func discoverWizLights() -> [LocatedLight] {
     let fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)

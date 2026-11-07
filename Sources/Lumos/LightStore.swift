@@ -23,6 +23,11 @@ private struct RefreshResult: Sendable {
 final class LightStore {
     var devices: [LightDevice]
     var isRefreshing = false
+    /// Set when no lamp answers and none of their saved addresses belongs to a
+    /// network the Mac is on, e.g. while tethered to a phone away from home.
+    var isAwayFromLampNetwork = false
+    /// Reads the Mac's networks; replaceable in tests.
+    @ObservationIgnored var localNetworks: () -> [LocalNetwork] = localIPv4Networks
     var toast: ToastMessage?
     var favoriteColors: [String] = []
     var favoriteTemperatures: [Int] = []
@@ -81,7 +86,18 @@ final class LightStore {
 
 
     /// The connection message to show under a lamp's name, if any.
+    /// The lamps' home network as "192.168.1.x", from the first saved address.
+    var lampNetworkHint: String? {
+        guard let ip = devices.first?.ip else { return nil }
+        let parts = ip.split(separator: ".")
+        guard parts.count == 4 else { return nil }
+        return parts.prefix(3).joined(separator: ".") + ".x"
+    }
+
     func status(for device: LightDevice) -> ConnectionFeedback? {
+        if !device.isReachable && isAwayFromLampNetwork {
+            return ConnectionFeedback(message: "Mac ev ağında değil", isError: true)
+        }
         if let feedback = connectionFeedback[device.id] { return feedback }
         return device.isReachable ? nil : ConnectionFeedback(message: "Bağlantı yok", isError: true)
     }
@@ -285,6 +301,10 @@ final class LightStore {
         if refreshedDevices != devices {
             devices = refreshedDevices
         }
+        let networks = localNetworks()
+        let away = !results.contains { $0.state != nil }
+            && !refreshedDevices.contains { device in networks.contains { $0.contains(device.ip) } }
+        if away != isAwayFromLampNetwork { isAwayFromLampNetwork = away }
         for event in feedbackEvents {
             showFeedback(id: event.0, message: event.1, isError: event.2, autoHide: event.3)
         }

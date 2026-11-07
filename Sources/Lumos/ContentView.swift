@@ -126,7 +126,10 @@ struct ContentView: View {
     }
 
     private var allLightsStatus: String {
-        if visibleDevices.isEmpty { return "Lambalara ulaşılamıyor" }
+        if visibleDevices.isEmpty {
+            guard store.isAwayFromLampNetwork else { return "Lambalara ulaşılamıyor" }
+            return store.lampNetworkHint.map { "Mac ev ağında değil · lambalar \($0) ağında" } ?? "Mac ev ağında değil"
+        }
         let power: String
         if visibleDevices.count == 1, let only = visibleDevices.first { power = "\(only.name) \(only.isOn ? "açık" : "kapalı")" }
         else if visibleDevices.allSatisfy({ !$0.isOn }) { power = "Tüm lambalar kapalı" }
