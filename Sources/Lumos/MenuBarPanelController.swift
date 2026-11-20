@@ -24,6 +24,10 @@ final class MenuBarPanelController: NSObject, NSPopoverDelegate {
     private var lastIconIsOn: Bool?
     /// Watch for clicks and Escape only while the panel is open.
     private var eventMonitors: [Any] = []
+    /// The app that was in front before the panel opened. Opening activates
+    /// Lumos for the keyboard; closing the panel from the icon or with Escape
+    /// gives the keyboard back to this app, as system menus do.
+    private var previousApp: NSRunningApplication?
     private static let width: CGFloat = 280
     private static let maximumHeight: CGFloat = 640
 
@@ -74,7 +78,7 @@ final class MenuBarPanelController: NSObject, NSPopoverDelegate {
             return
         }
         if popover.isShown {
-            dismiss()
+            dismiss(restoringFocus: true)
             return
         }
         // Use the current status button's window on every click. Cached screen
@@ -89,6 +93,8 @@ final class MenuBarPanelController: NSObject, NSPopoverDelegate {
         button.highlight(popover.isShown)
         // An accessory app is not active by itself; without activation, Tab and
         // arrow keys would go to the previously frontmost app.
+        let front = NSWorkspace.shared.frontmostApplication
+        previousApp = front?.processIdentifier == ProcessInfo.processInfo.processIdentifier ? nil : front
         NSApp.bringLumosForward()
         startMonitoringDismissal()
         if let window = popover.contentViewController?.view.window {
@@ -112,10 +118,19 @@ final class MenuBarPanelController: NSObject, NSPopoverDelegate {
         statusItem.menu = nil
     }
 
-    func dismiss() {
+    /// Clicks elsewhere already move the keyboard to what was clicked, so only
+    /// the icon and Escape restore the previous app, and only while Lumos has
+    /// no window of its own open.
+    func dismiss(restoringFocus: Bool = false) {
+        let wasShown = popover.isShown
         stopMonitoringDismissal()
         popover.close()
         statusItem?.button?.highlight(false)
+        let app = previousApp
+        previousApp = nil
+        guard restoringFocus, wasShown, let app, !app.isTerminated, NSApp.isActive,
+              !NSApp.windows.contains(where: { $0.isVisible && $0.styleMask.contains(.titled) }) else { return }
+        app.activate()
     }
 
     /// Closes the panel like a menu: on a click anywhere outside it (another app,
@@ -146,7 +161,7 @@ final class MenuBarPanelController: NSObject, NSPopoverDelegate {
         let panelWindow = popover.contentViewController?.view.window
         if event.type == .keyDown {
             guard event.keyCode == 53, event.window === panelWindow else { return false }
-            dismiss()
+            dismiss(restoringFocus: true)
             return true
         }
         if event.window !== panelWindow && !pointerIsOnStatusButton {
