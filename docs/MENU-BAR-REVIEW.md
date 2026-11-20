@@ -45,9 +45,14 @@ squareLength olarak sabittir; panelin 280 puan genişliği status item'a taşın
 Kararlı autosaveName macOS'un uygulama simgesinin konumunu saklamasını sağlar.
 Yalnız aggregate açık/kapalı durumu değiştiğinde template simge güncellenir.
 
-Tıklama, o anki status button'a bağlanan transient NSPopover açar. Ekran konumu
-ve display ID önbelleğe alınmaz. Kapatma davranışını AppKit yönetir; global fare
-izleyicisi, AX erişimi veya özel API eklenmez. Uzun içerik NSScrollView içinde,
+Tıklama, o anki status button'a bağlanan NSPopover'ı açar; panel açıkken ikona
+tekrar tıklamak onu kapatır. Ekran konumu ve display ID önbelleğe alınmaz.
+Popover transient değildir: macOS status item'ı sistem tarafında çizdiğinden ikona
+basmak Lumos'a başka uygulamaya tıklama ve kısa bir deaktivasyon olarak da
+ulaşır; transient popover bu yüzden düğmenin eylemi çalışmadan kapanıyor, eylem
+de onu yeniden açıyordu. Panel yalnız açıkken fare tıklamalarını ve Esc'i izler;
+imleç ikonun üzerindeyse dışarı tıklama sayılmaz. AX erişimi veya özel API
+eklenmez. Uzun içerik NSScrollView içinde,
 640 puanı ve mevcut ekranın kullanılabilir yüksekliğini aşmadan gösterilir.
 
 Ekran, Space ve uyku geçişleri paneli kapatır. Uyanış, paneli kapatıp ağ durumunu
