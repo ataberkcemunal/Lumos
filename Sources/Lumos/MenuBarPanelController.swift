@@ -22,6 +22,9 @@ final class MenuBarPanelController: NSObject, NSPopoverDelegate {
     private var refreshTask: Task<Void, Never>?
     private var isStopped = false
     private var lastIconIsOn: Bool?
+    /// When a press on the status button closed the transient popover, the
+    /// same click's mouse-up must not open it again.
+    private var closedByButtonPressAt: TimeInterval?
     private static let width: CGFloat = 280
     private static let maximumHeight: CGFloat = 640
 
@@ -72,6 +75,10 @@ final class MenuBarPanelController: NSObject, NSPopoverDelegate {
             dismiss()
             return
         }
+        if let closedAt = closedByButtonPressAt {
+            closedByButtonPressAt = nil
+            if let event = NSApp.currentEvent, event.timestamp - closedAt < 1 { return }
+        }
         // Use the current status button's window on every click. Cached screen
         // coordinates are invalid after hotplug, scaling, or Space transitions.
         guard let button = statusItem?.button, button.window?.screen != nil else { return }
@@ -119,6 +126,18 @@ final class MenuBarPanelController: NSObject, NSPopoverDelegate {
         guard !isStopped else { return }
         dismiss()
         refresh()
+    }
+
+    /// A transient popover closes on mouse-down outside it, which includes the
+    /// status button, so the toggle sees it already closed on mouse-up.
+    func popoverWillClose(_ notification: Notification) {
+        guard let event = NSApp.currentEvent, event.type == .leftMouseDown,
+              let button = statusItem?.button, event.window === button.window,
+              button.bounds.contains(button.convert(event.locationInWindow, from: nil)) else {
+            closedByButtonPressAt = nil
+            return
+        }
+        closedByButtonPressAt = event.timestamp
     }
 
     func popoverDidClose(_ notification: Notification) {
