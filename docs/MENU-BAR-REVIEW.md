@@ -50,8 +50,10 @@ tekrar tıklamak onu kapatır. Ekran konumu ve display ID önbelleğe alınmaz.
 Popover transient değildir: macOS status item'ı sistem tarafında çizdiğinden ikona
 basmak Lumos'a başka uygulamaya tıklama ve kısa bir deaktivasyon olarak da
 ulaşır; transient popover bu yüzden düğmenin eylemi çalışmadan kapanıyor, eylem
-de onu yeniden açıyordu. Panel yalnız açıkken fare tıklamalarını ve Esc'i izler;
-imleç ikonun üzerindeyse dışarı tıklama sayılmaz. AX erişimi veya özel API
+de onu yeniden açıyordu. Panel yalnız açıkken fare tıklamalarını izler;
+imleç ikonun üzerindeyse dışarı tıklama sayılmaz. Sistem menüleri gibi panel
+Lumos'u öne almaz, öndeki uygulama odağını korur. Panel anında açılır, kapanırken
+solar; solarken ikona yeniden basmak onu hemen geri açar. AX erişimi veya özel API
 eklenmez. Uzun içerik NSScrollView içinde,
 640 puanı ve mevcut ekranın kullanılabilir yüksekliğini aşmadan gösterilir.
 

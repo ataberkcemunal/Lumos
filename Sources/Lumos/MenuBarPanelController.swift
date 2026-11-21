@@ -22,12 +22,15 @@ final class MenuBarPanelController: NSObject, NSPopoverDelegate {
     private var refreshTask: Task<Void, Never>?
     private var isStopped = false
     private var lastIconIsOn: Bool?
-    /// Watch for clicks and Escape only while the panel is open.
+    /// Watch for clicks only while the panel is open.
     private var eventMonitors: [Any] = []
-    /// The app that was in front before the panel opened. Opening activates
-    /// Lumos for the keyboard; closing the panel from the icon or with Escape
-    /// gives the keyboard back to this app, as system menus do.
-    private var previousApp: NSRunningApplication?
+    /// Whether the panel is meant to be open. While it fades out the popover is
+    /// still on screen, so clicks go by this instead of `popover.isShown`.
+    private var isOpen = false
+    /// Bumped whenever a fade is started or cut short, so a stale fade's end
+    /// never closes a panel that was opened again in the meantime.
+    private var fadeGeneration = 0
+    private static let fadeOutDuration: TimeInterval = 0.2
     private static let width: CGFloat = 280
     private static let maximumHeight: CGFloat = 640
 
@@ -53,6 +56,7 @@ final class MenuBarPanelController: NSObject, NSPopoverDelegate {
         // press that lands on the status button before the button's action runs,
         // so that action found it closed and opened it again.
         popover.behavior = .applicationDefined
+        // Like system menu bar panels: appear at once, fade out on close.
         popover.animates = false
         popover.delegate = self
 
@@ -77,10 +81,12 @@ final class MenuBarPanelController: NSObject, NSPopoverDelegate {
             showContextMenu()
             return
         }
-        if popover.isShown {
-            dismiss(restoringFocus: true)
+        if isOpen {
+            dismiss()
             return
         }
+        // Opened again while the last close is still fading: drop that fade.
+        if popover.isShown { finishClosing() }
         // Use the current status button's window on every click. Cached screen
         // coordinates are invalid after hotplug, scaling, or Space transitions.
         guard let button = statusItem?.button, button.window?.screen != nil else { return }
@@ -90,19 +96,11 @@ final class MenuBarPanelController: NSObject, NSPopoverDelegate {
         // move menu bar focus to the display holding Lumos's window, which shifts
         // the status button and opens the panel on the wrong monitor.
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-        button.highlight(popover.isShown)
-        // An accessory app is not active by itself; without activation, Tab and
-        // arrow keys would go to the previously frontmost app.
-        let front = NSWorkspace.shared.frontmostApplication
-        previousApp = front?.processIdentifier == ProcessInfo.processInfo.processIdentifier ? nil : front
-        NSApp.bringLumosForward()
+        isOpen = popover.isShown
+        button.highlight(isOpen)
+        // Lumos is not activated, as with system menu bar items: the app in front
+        // keeps its focus while the panel is open and after it closes.
         startMonitoringDismissal()
-        if let window = popover.contentViewController?.view.window {
-            window.makeKey()
-            // Start without a focused control so a stray Space cannot switch lamps;
-            // the first Tab enters the controls.
-            DispatchQueue.main.async { window.makeFirstResponder(nil) }
-        }
         refresh()
     }
 
@@ -118,23 +116,41 @@ final class MenuBarPanelController: NSObject, NSPopoverDelegate {
         statusItem.menu = nil
     }
 
-    /// Clicks elsewhere already move the keyboard to what was clicked, so only
-    /// the icon and Escape restore the previous app, and only while Lumos has
-    /// no window of its own open.
-    func dismiss(restoringFocus: Bool = false) {
-        let wasShown = popover.isShown
+    func dismiss(animated: Bool = true) {
+        isOpen = false
         stopMonitoringDismissal()
-        popover.close()
         statusItem?.button?.highlight(false)
-        let app = previousApp
-        previousApp = nil
-        guard restoringFocus, wasShown, let app, !app.isTerminated, NSApp.isActive,
-              !NSApp.windows.contains(where: { $0.isVisible && $0.styleMask.contains(.titled) }) else { return }
-        app.activate()
+        guard popover.isShown else { return }
+        guard animated, let window = popover.contentViewController?.view.window else {
+            finishClosing()
+            return
+        }
+        fadeGeneration += 1
+        let generation = fadeGeneration
+        // A click landing on the fading panel goes to what is underneath.
+        window.ignoresMouseEvents = true
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = Self.fadeOutDuration
+            window.animator().alphaValue = 0
+        } completionHandler: { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.fadeGeneration == generation else { return }
+                self.finishClosing()
+            }
+        }
+    }
+
+    /// Takes the popover off screen now, ending any fade.
+    private func finishClosing() {
+        fadeGeneration += 1
+        let window = popover.contentViewController?.view.window
+        popover.close()
+        window?.alphaValue = 1
+        window?.ignoresMouseEvents = false
     }
 
     /// Closes the panel like a menu: on a click anywhere outside it (another app,
-    /// the desktop, the main window), on Escape, and when Lumos is deactivated.
+    /// the desktop, the main window), and when Lumos is deactivated.
     /// A click on the status button itself is left to `togglePopover`.
     private func startMonitoringDismissal() {
         stopMonitoringDismissal()
@@ -147,27 +163,19 @@ final class MenuBarPanelController: NSObject, NSPopoverDelegate {
                 if !self.pointerIsOnStatusButton { self.dismiss() }
             }
         }) { eventMonitors.append(global) }
-        if let local = NSEvent.addLocalMonitorForEvents(matching: clicks.union(.keyDown), handler: { [weak self] event in
-            let swallow = MainActor.assumeIsolated { self?.handleWhileOpen(event) ?? false }
-            return swallow ? nil : event
+        if let local = NSEvent.addLocalMonitorForEvents(matching: clicks, handler: { [weak self] event in
+            MainActor.assumeIsolated { self?.handleClickWhileOpen(event) }
+            return event
         }) { eventMonitors.append(local) }
         NotificationCenter.default.addObserver(self, selector: #selector(applicationDidResignActive(_:)),
             name: NSApplication.didResignActiveNotification, object: nil)
     }
 
-    /// Returns true when the event was used up (Escape that closed the panel).
-    private func handleWhileOpen(_ event: NSEvent) -> Bool {
-        guard popover.isShown else { return false }
-        let panelWindow = popover.contentViewController?.view.window
-        if event.type == .keyDown {
-            guard event.keyCode == 53, event.window === panelWindow else { return false }
-            dismiss(restoringFocus: true)
-            return true
-        }
-        if event.window !== panelWindow && !pointerIsOnStatusButton {
+    private func handleClickWhileOpen(_ event: NSEvent) {
+        guard isOpen else { return }
+        if event.window !== popover.contentViewController?.view.window && !pointerIsOnStatusButton {
             dismiss()
         }
-        return false
     }
 
     private func stopMonitoringDismissal() {
@@ -189,17 +197,19 @@ final class MenuBarPanelController: NSObject, NSPopoverDelegate {
         return frame.contains(NSEvent.mouseLocation)
     }
 
+    // The anchor may be gone after these, so the panel closes without a fade.
     @objc func displayContextChanged(_ notification: Notification) {
-        dismiss()
+        dismiss(animated: false)
     }
 
     @objc func didWake(_ notification: Notification) {
         guard !isStopped else { return }
-        dismiss()
+        dismiss(animated: false)
         refresh()
     }
 
     func popoverDidClose(_ notification: Notification) {
+        isOpen = false
         stopMonitoringDismissal()
         statusItem?.button?.highlight(false)
         // Releasing the view resets transient UI and cancels pending slider previews.
@@ -281,7 +291,7 @@ final class MenuBarPanelController: NSObject, NSPopoverDelegate {
         NSWorkspace.shared.notificationCenter.removeObserver(self)
         refreshTask?.cancel()
         refreshTask = nil
-        dismiss()
+        dismiss(animated: false)
         scrollView.documentView = nil
         hostingView = nil
         popover.contentViewController = nil

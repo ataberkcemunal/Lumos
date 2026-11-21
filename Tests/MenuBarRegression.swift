@@ -18,26 +18,37 @@ struct MenuBarRegression {
         precondition(controller.popover.contentViewController == nil, "Content should be lazy")
         try? await Task.sleep(for: .milliseconds(300))
 
+        // The panel fades out, so it counts as shown until the animation ends.
+        func closed() async -> Bool {
+            for _ in 0..<50 where controller.popover.isShown {
+                try? await Task.sleep(for: .milliseconds(20))
+            }
+            return !controller.popover.isShown
+        }
+
         for _ in 0..<5 {
             controller.togglePopover(nil)
             precondition(controller.popover.isShown, "Popover failed to open in GUI session")
             precondition(controller.popover.contentSize.width == 280)
             precondition((120...640).contains(controller.popover.contentSize.height))
             controller.togglePopover(nil)
-            precondition(!controller.popover.isShown)
+            let isClosed = await closed()
+            precondition(isClosed)
             precondition(controller.statusItem === item, "Status item was recreated")
         }
 
         controller.togglePopover(nil)
         NotificationCenter.default.post(name: NSApplication.didChangeScreenParametersNotification, object: application)
-        precondition(!controller.popover.isShown, "Display change should dismiss stale anchor")
+        let isClosed = await closed()
+        precondition(isClosed, "Display change should dismiss stale anchor")
         precondition(controller.statusItem === item)
 
         for name in [NSWorkspace.willSleepNotification, NSWorkspace.screensDidSleepNotification,
                      NSWorkspace.activeSpaceDidChangeNotification, NSWorkspace.didWakeNotification] {
             controller.togglePopover(nil)
             NSWorkspace.shared.notificationCenter.post(name: name, object: NSWorkspace.shared)
-            precondition(!controller.popover.isShown, "Workspace transition should close presentation")
+            let isClosed = await closed()
+            precondition(isClosed, "Workspace transition should close presentation")
             precondition(controller.statusItem === item)
         }
         try? await Task.sleep(for: .milliseconds(100))
@@ -54,6 +65,8 @@ struct MenuBarRegression {
         precondition(scroll.documentView!.frame.height > controller.popover.contentSize.height)
         precondition(controller.popover.contentSize.height <= 640)
         controller.dismiss()
+        let isDismissed = await closed()
+        precondition(isDismissed)
 
         store.devices[0].isOn = true
         try? await Task.sleep(for: .milliseconds(100))
